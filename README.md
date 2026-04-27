@@ -72,10 +72,11 @@ This is the core design constraint, not a feature.
 - The live monitor UI shows only the **last** event (no timestamp, no
   history list).
 - The HTTP API binds to `127.0.0.1` and never accepts remote connections.
-- The DB lives under `%APPDATA%/KeyLife/` (or wherever `data_dir` is
-  configured) and contains no reconstructable text.
-- A per-install secret is generated at first launch in `backend/.secret_key`
-  (mode `0o600`, never committed).
+- The DB lives under `%APPDATA%\AmMstools\KeyLife\` (or wherever `data_dir`
+  is configured) and contains no reconstructable text.
+- A per-install secret is generated at first launch (mode `0o600`, never
+  committed). Location: `backend/.secret_key` in dev,
+  `%APPDATA%\AmMstools\KeyLife\.secret_key` in the packaged build.
 
 See `CLAUDE.md` for the full security audit log.
 
@@ -115,14 +116,28 @@ python run.py --log-level=DEBUG
 
 ## Build
 
-A standalone Windows installer is produced in two steps:
+A standalone Windows installer is produced in a single step:
 
 ```bash
-pyinstaller run.spec                                  # → dist/KeyLife/
-"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+pyinstaller run.spec
 ```
 
-Output: `installer_output/KeyLife_Setup_<version>.exe`
+`run.spec` chains the full pipeline:
+
+1. **Pre-build** — runs `npm install` (if `node_modules/` is missing) then
+   `npm run build` in `frontend/`, so the bundled SPA is always fresh.
+2. **PyInstaller** — produces `dist/keylife/keylife.exe` + `_internal/` with
+   `backend/alembic/`, `backend/alembic.ini`, `frontend/dist/`, and
+   `assets/icon.ico` bundled as data files.
+3. **Post-build** — invokes Inno Setup (`ISCC.exe`, auto-detected on
+   `C:\Program Files (x86)\Inno Setup 6\`) on `installer.iss`.
+
+Output: `installer_output\KeyLife_Setup_<version>.exe`
+
+Requirements: Python 3.11+, Node.js (for the frontend step), and
+[Inno Setup 6](https://jrsoftware.org/isdl.php) (for the installer step). If
+ISCC is missing the spec still produces the PyInstaller bundle and skips the
+installer with a warning.
 
 ## Project layout
 
@@ -138,8 +153,9 @@ backend/
     ui/monitor.py # debug monitor
   alembic/        # DB migrations
 frontend/         # Vue 3 + Vite + Tailwind + ECharts
+assets/           # icon.ico / icon.png (app + installer)
 run.py            # launcher (migrations + entry point)
-run.spec          # PyInstaller config
+run.spec          # PyInstaller config (also runs npm build + ISCC)
 installer.iss     # Inno Setup config
 ```
 

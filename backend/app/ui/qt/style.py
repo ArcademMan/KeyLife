@@ -208,4 +208,18 @@ QLabel#statusBad {
     font-size: 11px;
     letter-spacing: 1px;
 }
+
+/* flush countdown bar */
+QProgressBar#flushBar {
+    background: #232732;
+    border: none;
+    border-radius: 3px;
+}
+QProgressBar#flushBar::chunk {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #7c5cff, stop:1 #5b8cff
+    );
+    border-radius: 3px;
+}
 """

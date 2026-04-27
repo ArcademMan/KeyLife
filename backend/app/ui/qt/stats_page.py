@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QProgressBar,
     QPushButton,
     QSizePolicy,
     QTableWidget,
@@ -182,12 +183,32 @@ class StatsPage(QWidget):
         tl.addWidget(self.tbl)
         root.addWidget(top_card)
 
-        # Status row
+        # Status row + flush countdown
         bottom = QHBoxLayout()
         self.status = QLabel("● HOOK ACTIVE")
         self.status.setObjectName("statusOk")
         bottom.addWidget(self.status)
         bottom.addStretch(1)
+
+        self.lbl_flush = QLabel("NEXT FLUSH")
+        self.lbl_flush.setObjectName("kpiLabel")
+        bottom.addWidget(self.lbl_flush)
+
+        self.flush_bar = QProgressBar()
+        self.flush_bar.setObjectName("flushBar")
+        self.flush_bar.setRange(0, 1000)
+        self.flush_bar.setValue(1000)
+        self.flush_bar.setTextVisible(False)
+        self.flush_bar.setFixedWidth(160)
+        self.flush_bar.setFixedHeight(6)
+        bottom.addWidget(self.flush_bar)
+
+        self.lbl_flush_eta = QLabel("--s")
+        self.lbl_flush_eta.setObjectName("kpiLabel")
+        self.lbl_flush_eta.setFixedWidth(36)
+        self.lbl_flush_eta.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        bottom.addWidget(self.lbl_flush_eta)
+
         root.addLayout(bottom)
 
         self._timer = QTimer(self)
@@ -228,6 +249,13 @@ class StatsPage(QWidget):
         self._anim_today.set(today)
         self._anim_alltime.set(alltime)
         self._fill_top(top)
+
+        # Flush countdown bar: empties as we approach the next flush.
+        interval = self._daemon.flush_interval_seconds
+        remaining = self._daemon.seconds_until_next_flush()
+        if interval > 0:
+            self.flush_bar.setValue(int(remaining / interval * 1000))
+        self.lbl_flush_eta.setText(f"{int(remaining)}s")
 
     def _fill_top(self, rows: list[tuple[int, int, int]]) -> None:
         self.tbl.setRowCount(len(rows))

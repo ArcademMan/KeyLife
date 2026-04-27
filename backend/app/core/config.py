@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -55,6 +56,12 @@ class Settings(BaseSettings):
 
 
 def _secret_key_path() -> Path:
+    # In dev il file vive accanto al codice (in .gitignore). In modalità
+    # frozen (PyInstaller) BACKEND_DIR è dentro la cartella di installazione
+    # — read-only se installato in Program Files, e comunque sovrascritto a
+    # ogni reinstall — quindi il segreto va con gli altri dati utente.
+    if getattr(sys, "frozen", False):
+        return user_data_dir() / ".secret_key"
     return BACKEND_DIR / ".secret_key"
 
 

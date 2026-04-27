@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import queue
 import threading
+import time
 from collections.abc import Callable
 
 from app.aggregator.buffer import Aggregator
@@ -33,10 +34,22 @@ class KeyLifeDaemon:
         self._flush_thread: threading.Thread | None = None
         self._flush_lock = threading.Lock()
         self._SessionLocal = get_sessionmaker()
+        # Monotonic timestamp of the scheduled next flush. Used by the UI to
+        # render a countdown. Reset right after each flush completes.
+        self._next_flush_at: float = 0.0
 
     @property
     def aggregator(self) -> Aggregator:
         return self._aggregator
+
+    @property
+    def flush_interval_seconds(self) -> float:
+        return self._settings.flush_interval_seconds
+
+    def seconds_until_next_flush(self) -> float:
+        if self._next_flush_at <= 0.0:
+            return self._settings.flush_interval_seconds
+        return max(0.0, self._next_flush_at - time.monotonic())
 
     def start(self) -> None:
         # Log only the filename, not the full path: the full path includes the
@@ -66,11 +79,14 @@ class KeyLifeDaemon:
 
     def _flush_loop(self) -> None:
         interval = self._settings.flush_interval_seconds
+        self._next_flush_at = time.monotonic() + interval
         while not self._stop.wait(interval):
             try:
                 self._flush_once()
             except Exception:
                 log.exception("flush failed")
+            finally:
+                self._next_flush_at = time.monotonic() + interval
 
     def _flush_once(self) -> None:
         # Serialize manual ("Flush now" from the UI thread) and periodic flushes.
