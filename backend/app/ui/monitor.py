@@ -23,12 +23,7 @@ from app.service.daemon import KeyLifeDaemon, UiEventBridge
 
 
 def _fmt_event(ev: KeyEvent) -> str:
-    flags = []
-    if ev.extended:
-        flags.append("E")
-    if ev.injected:
-        flags.append("I")
-    flag_str = f" [{''.join(flags)}]" if flags else ""
+    flag_str = " [E]" if ev.extended else ""
     # No timestamp_ms in the rendered string: keeping ordered, timed events
     # would let an observer reconstruct typed sequences.
     return (

@@ -54,8 +54,10 @@ Win32 low-level hook  ──►  in-memory aggregator  ──►  SQLite (WAL)
                               └─────────────────►  PySide6 desktop UI
 ```
 
-- **Hook** (`backend/app/hook/`): Win32 `WH_KEYBOARD_LL` callback, ignores
-  auto-repeat, drops the original key sequence at the boundary.
+- **Hook** (`backend/app/hook/`): Win32 Raw Input listener (HID generic
+  keyboard, `RIDEV_INPUTSINK`) on a hidden message-only window — passive
+  sink, never in the input dispatch chain. Ignores auto-repeat and drops
+  the original key sequence at the boundary.
 - **Aggregator** (`backend/app/aggregator/buffer.py`): bounded in-memory
   counters with TTL anti-stale on stuck DOWN events.
 - **Storage** (`backend/app/storage/`): SQLAlchemy 2 + Alembic migrations,
@@ -144,7 +146,7 @@ installer with a warning.
 ```
 backend/
   app/
-    hook/         # Win32 low-level keyboard hook
+    hook/         # Win32 Raw Input keyboard listener
     aggregator/   # in-memory counters + flush
     storage/      # SQLAlchemy models, repository, session
     service/      # daemon orchestration

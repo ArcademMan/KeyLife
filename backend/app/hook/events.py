@@ -15,6 +15,5 @@ class KeyEvent:
     vk: int
     scancode: int
     extended: bool
-    injected: bool
     timestamp_ms: int
     is_repeat: bool

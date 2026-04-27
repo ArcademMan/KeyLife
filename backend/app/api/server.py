@@ -74,9 +74,11 @@ def build_app(daemon: KeyLifeDaemon | None = None) -> FastAPI:
             if owned:
                 d.stop()
 
+    from app import __version__
+
     app = FastAPI(
         title="KeyLife API",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 
