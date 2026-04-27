@@ -1,0 +1,53 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html, body, #app { height: 100%; }
+  body {
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue',
+                 Arial, 'Noto Sans', sans-serif;
+  }
+  /* Default focus ring across all interactive elements */
+  :focus-visible {
+    outline: 2px solid #7c5cff;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply bg-slate-900/70 border border-slate-800 rounded-xl shadow-xl;
+  }
+  .panel-pad { @apply p-5; }
+  .panel-title {
+    @apply text-xs uppercase tracking-wider text-slate-300 font-semibold;
+  }
+  .nav-link {
+    @apply flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-slate-300
+           hover:text-slate-100 hover:bg-slate-800/60 transition;
+  }
+  .nav-link-active {
+    @apply bg-slate-800 text-white;
+  }
+  .btn {
+    @apply px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700
+           text-sm text-slate-200 border border-slate-700 transition;
+  }
+  .btn-accent {
+    @apply px-3 py-1.5 rounded-lg bg-accent hover:bg-accent-soft
+           text-sm text-white transition;
+  }
+  /* Skip-to-content link, visible on focus only */
+  .skip-link {
+    @apply sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50
+           focus:px-3 focus:py-2 focus:rounded-lg focus:bg-accent focus:text-white;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #334155; }
