@@ -1,13 +1,20 @@
+; La versione è iniettata dallo script di build (run.spec) che la legge
+; da pyproject.toml e la passa a ISCC via /DMyAppVersion=x.y.z. Il default
+; qui sotto serve solo se ISCC viene invocato a mano senza override.
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0"
+#endif
+
 [Setup]
 ; Info applicazione
 AppName=KeyLife
-AppVersion=0.1.0
+AppVersion={#MyAppVersion}
 AppPublisher=ArcademMan
 AppPublisherURL=https://github.com/ArcademMan/KeyLife
 DefaultDirName={autopf}\KeyLife
 DefaultGroupName=KeyLife
 OutputDir=installer_output
-OutputBaseFilename=KeyLife_Setup_0.1.0
+OutputBaseFilename=KeyLife_Setup_{#MyAppVersion}
 Compression=lzma2
 SolidCompression=yes
 SetupIconFile=assets\icon.ico

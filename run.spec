@@ -7,6 +7,20 @@ from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_submodules
 
+try:
+    import tomllib  # 3.11+
+except ModuleNotFoundError:  # pragma: no cover — 3.10 fallback
+    import tomli as tomllib  # type: ignore[no-redef]
+
+
+def _read_version() -> str:
+    pyproject = Path(SPECPATH).resolve() / 'pyproject.toml'
+    return tomllib.loads(pyproject.read_text(encoding='utf-8'))['project']['version']
+
+
+APP_VERSION = _read_version()
+print(f'[spec] KeyLife version: {APP_VERSION}')
+
 
 # --- Pre-build: compila il frontend Vite -----------------------------------
 # Eseguito prima dell'Analysis così `frontend/dist` è fresco quando viene
@@ -119,8 +133,11 @@ def _build_installer() -> None:
         print('[spec] ISCC non trovato (Inno Setup 6 non installato?), salto.')
         return
 
-    print(f'[spec] Compilazione installer: {iscc} {iss}')
-    result = subprocess.run([iscc, str(iss)], cwd=str(project_root))
+    print(f'[spec] Compilazione installer: {iscc} {iss} /DMyAppVersion={APP_VERSION}')
+    result = subprocess.run(
+        [iscc, f'/DMyAppVersion={APP_VERSION}', str(iss)],
+        cwd=str(project_root),
+    )
     if result.returncode != 0:
         print(f'[spec] ISCC ha restituito {result.returncode}', file=sys.stderr)
 

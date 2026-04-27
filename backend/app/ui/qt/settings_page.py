@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app import __version__
 from app.core.config import get_settings
 from app.service.daemon import KeyLifeDaemon
 from app.ui.qt import autostart, ui_state
@@ -130,7 +131,7 @@ class SettingsPage(QWidget):
         w = QWidget()
         h = QHBoxLayout(w)
         h.setContentsMargins(4, 0, 4, 0)
-        h.addWidget(QLabel("KeyLife · v0.1.0", objectName="muted"))
+        h.addWidget(QLabel(f"KeyLife · v{__version__}", objectName="muted"))
         h.addStretch(1)
         h.addWidget(QLabel(f"DB: {self._settings.db_filename}", objectName="muted"))
         return w
