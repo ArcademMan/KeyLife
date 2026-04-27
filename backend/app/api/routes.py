@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 from datetime import date as _date, timedelta
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.aggregator.buffer import Aggregator
 from app.core.config import get_settings
+from app.core.paths import BACKEND_DIR
 from app.hook.vk_codes import name as vk_name
 from app.storage.repository import (
     all_time_total_and_first_date,
@@ -32,7 +32,7 @@ from .schemas import (
 
 router = APIRouter(prefix="/api")
 
-_LAYOUT_PATH = Path(__file__).resolve().parent / "data" / "q6he_ansi_it.json"
+_LAYOUT_PATH = BACKEND_DIR / "app" / "api" / "data" / "q6he_ansi_it.json"
 
 
 def _aggregator(request: Request) -> Aggregator | None:

@@ -12,11 +12,46 @@ from __future__ import annotations
 
 import argparse
 import logging
+import logging.handlers
 import signal
 import sys
 import threading
 
+from app.core.paths import user_data_dir
 from app.service.daemon import KeyLifeDaemon
+
+
+def _setup_logging(level: str) -> None:
+    """Console handler + rotating file handler under user_data_dir.
+
+    The file handler is essential in the packaged exe (console=False), where
+    stderr is unreachable and otherwise startup failures vanish silently.
+    """
+    root = logging.getLogger()
+    root.setLevel(level.upper())
+    fmt = logging.Formatter("%(asctime)s %(levelname)-5s %(name)s: %(message)s")
+
+    # PyInstaller --windowed sets sys.stdout/stderr to None; attaching a
+    # StreamHandler in that case would crash on first emit.
+    if sys.stderr is not None:
+        stream = logging.StreamHandler()
+        stream.setFormatter(fmt)
+        root.addHandler(stream)
+
+    try:
+        log_dir = user_data_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        fh = logging.handlers.RotatingFileHandler(
+            log_dir / "keylife.log",
+            maxBytes=1_000_000,
+            backupCount=2,
+            encoding="utf-8",
+        )
+        fh.setFormatter(fmt)
+        root.addHandler(fh)
+    except OSError:
+        # Logging must never crash the app; the stream handler still works.
+        logging.getLogger(__name__).exception("file logger setup failed")
 
 
 def _run_headless() -> int:
@@ -62,9 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
 
-    logging.basicConfig(
-        level=args.log_level.upper(),
-        format="%(asctime)s %(levelname)-5s %(name)s: %(message)s",
+    _setup_logging(args.log_level)
+    logging.getLogger(__name__).info(
+        "KeyLife startup: argv=%r frozen=%s", sys.argv, getattr(sys, "frozen", False)
     )
 
     if args.headless:

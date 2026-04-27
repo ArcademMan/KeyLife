@@ -148,7 +148,7 @@ class StatsPage(QWidget):
         else:
             self._api_url = None
             self.web_btn.setEnabled(False)
-            self.web_btn.setToolTip("Run with --api to enable the web dashboard")
+            self.web_btn.setToolTip("Open the web viewer Statistics.")
         top_grid.addWidget(self.web_btn, 1, 2)
         root.addLayout(top_grid)
 

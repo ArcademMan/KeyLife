@@ -5,6 +5,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_submodules
+
 
 # --- Pre-build: compila il frontend Vite -----------------------------------
 # Eseguito prima dell'Analysis così `frontend/dist` è fresco quando viene
@@ -41,6 +43,7 @@ a = Analysis(
         ('assets/icon.png', 'assets'),
         ('backend/alembic.ini', 'backend'),
         ('backend/alembic', 'backend/alembic'),
+        ('backend/app/api/data', 'backend/app/api/data'),
         ('frontend/dist', 'frontend/dist'),
     ],
     hiddenimports=[
@@ -48,6 +51,14 @@ a = Analysis(
         'app',
         'app.core.config',
         'app.storage.models',
+        # uvicorn/fastapi caricano i loro impl dinamicamente via stringhe;
+        # senza questi il `--api` thread crasha silenziosamente nell'exe e
+        # il bottone WEB resta disabilitato.
+        *collect_submodules('uvicorn'),
+        *collect_submodules('fastapi'),
+        *collect_submodules('starlette'),
+        *collect_submodules('anyio'),
+        *collect_submodules('h11'),
     ],
     hookspath=[],
     hooksconfig={},

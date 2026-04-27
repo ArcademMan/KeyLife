@@ -163,6 +163,11 @@ def _start_api_thread(daemon: KeyLifeDaemon):
         log_level="info",
         access_log=True,
         lifespan="on",
+        # uvicorn's default LOGGING_CONFIG installs a ColourizedFormatter that
+        # calls sys.stdout.isatty(); in the packaged build (console=False)
+        # sys.stdout is None and the constructor crashes. Reuse the root
+        # logger configured in app.__main__._setup_logging instead.
+        log_config=None,
     )
     server = uvicorn.Server(config)
 
