@@ -1,8 +1,8 @@
-"""Tiny JSON-backed UI preferences (start_minimized).
+"""Tiny JSON-backed UI preferences.
 
-Lives next to the SQLite DB in the user data dir. Settings that have
-runtime side effects (data_dir, flush interval) stay in pydantic-settings;
-this file only stores what the UI itself needs to remember.
+Lives next to the SQLite DB in the user data dir. Holds preferences
+that the UI mutates at runtime: start_minimized and the flush interval
+override (None = fall back to pydantic-settings default).
 """
 
 from __future__ import annotations
@@ -16,10 +16,23 @@ from app.core.config import get_settings
 @dataclass
 class UiState:
     start_minimized: bool = False
+    flush_interval_seconds: float | None = None
 
 
 def _path():
     return get_settings().data_dir / "ui_state.json"
+
+
+def _coerce_interval(v) -> float | None:
+    if v is None:
+        return None
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    if f <= 0:
+        return None
+    return f
 
 
 def load() -> UiState:
@@ -30,7 +43,10 @@ def load() -> UiState:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return UiState()
-    return UiState(start_minimized=bool(data.get("start_minimized", False)))
+    return UiState(
+        start_minimized=bool(data.get("start_minimized", False)),
+        flush_interval_seconds=_coerce_interval(data.get("flush_interval_seconds")),
+    )
 
 
 def save(state: UiState) -> None:

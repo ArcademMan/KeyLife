@@ -75,7 +75,7 @@ class MainWindow(QMainWindow):
         tabs.setObjectName("root")
         tabs.setDocumentMode(True)
         self.stats = StatsPage(daemon, bridge, api_url=api_url)
-        self.settings_page = SettingsPage()
+        self.settings_page = SettingsPage(daemon=daemon)
         tabs.addTab(self.stats, "Stats")
         tabs.addTab(self.settings_page, "Settings")
         self.setCentralWidget(tabs)

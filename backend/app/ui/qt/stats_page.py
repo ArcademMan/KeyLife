@@ -40,6 +40,9 @@ log = logging.getLogger(__name__)
 # Aggregator session_view() is cheap (lock + dict copy). DB SUMs on
 # DailyKeyCount are sub-millisecond. One timer drives both.
 TICK_MS = 500
+# Flush bar refreshes more often so the countdown looks smooth even at
+# short intervals; this only does in-memory math, no DB or aggregator hit.
+FLUSH_TICK_MS = 100
 
 
 def _fmt(n: int) -> str:
@@ -217,6 +220,11 @@ class StatsPage(QWidget):
         self._timer.start()
         self._tick()
 
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(FLUSH_TICK_MS)
+        self._flush_timer.timeout.connect(self._tick_flush_bar)
+        self._flush_timer.start()
+
     def eventFilter(self, obj, event):  # noqa: N802 — Qt override
         if obj is self._today_card and event.type() == QEvent.Type.Resize:
             h = self._today_card.height()
@@ -250,7 +258,12 @@ class StatsPage(QWidget):
         self._anim_alltime.set(alltime)
         self._fill_top(top)
 
+        self._tick_flush_bar()
+
+    def _tick_flush_bar(self) -> None:
         # Flush countdown bar: empties as we approach the next flush.
+        # Driven by its own faster timer so the bar looks smooth at short
+        # intervals (e.g. 5s) without polling the DB at the same rate.
         interval = self._daemon.flush_interval_seconds
         remaining = self._daemon.seconds_until_next_flush()
         if interval > 0:

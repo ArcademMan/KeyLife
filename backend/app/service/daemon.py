@@ -31,12 +31,27 @@ class KeyLifeDaemon:
         self._hook = WindowsKeyboardHook(listener=self._on_event)
         self._ui_listener = ui_listener
         self._stop = threading.Event()
+        # Wakes the flush loop early when the interval changes, without
+        # ending it (which is what setting _stop would do).
+        self._wake = threading.Event()
         self._flush_thread: threading.Thread | None = None
         self._flush_lock = threading.Lock()
         self._SessionLocal = get_sessionmaker()
         # Monotonic timestamp of the scheduled next flush. Used by the UI to
         # render a countdown. Reset right after each flush completes.
         self._next_flush_at: float = 0.0
+        # Mutable so the Settings UI can change it at runtime; the flush
+        # loop re-reads it each iteration.
+        self._flush_interval = float(self._settings.flush_interval_seconds)
+        # Honor a previously-saved UI override.
+        try:
+            from app.ui.qt import ui_state  # local import: keeps daemon importable headless
+
+            saved = ui_state.load().flush_interval_seconds
+            if saved is not None and saved > 0:
+                self._flush_interval = float(saved)
+        except Exception:
+            log.exception("could not load flush interval from ui_state")
 
     @property
     def aggregator(self) -> Aggregator:
@@ -44,11 +59,25 @@ class KeyLifeDaemon:
 
     @property
     def flush_interval_seconds(self) -> float:
-        return self._settings.flush_interval_seconds
+        return self._flush_interval
+
+    def set_flush_interval(self, seconds: float) -> None:
+        # Clamp to a sane range. The lower bound prevents a runaway flush
+        # loop hammering SQLite; the upper bound is a generous 24h.
+        if seconds < 1.0:
+            seconds = 1.0
+        elif seconds > 86_400.0:
+            seconds = 86_400.0
+        self._flush_interval = float(seconds)
+        # Reschedule the countdown so the UI reflects the change immediately.
+        self._next_flush_at = time.monotonic() + self._flush_interval
+        # Wake the flush loop so it re-reads the new interval right away
+        # instead of finishing its current wait on the old one.
+        self._wake.set()
 
     def seconds_until_next_flush(self) -> float:
         if self._next_flush_at <= 0.0:
-            return self._settings.flush_interval_seconds
+            return self._flush_interval
         return max(0.0, self._next_flush_at - time.monotonic())
 
     def start(self) -> None:
@@ -63,6 +92,7 @@ class KeyLifeDaemon:
     def stop(self) -> None:
         log.info("Stopping KeyLife daemon")
         self._stop.set()
+        self._wake.set()
         self._hook.stop()
         if self._flush_thread is not None:
             self._flush_thread.join(timeout=5.0)
@@ -78,15 +108,26 @@ class KeyLifeDaemon:
                 log.exception("UI listener raised")
 
     def _flush_loop(self) -> None:
-        interval = self._settings.flush_interval_seconds
-        self._next_flush_at = time.monotonic() + interval
-        while not self._stop.wait(interval):
+        self._next_flush_at = time.monotonic() + self._flush_interval
+        while not self._stop.is_set():
+            remaining = self._next_flush_at - time.monotonic()
+            if remaining > 0:
+                # _wake is pulsed by both stop() and set_flush_interval().
+                # The interval-change branch reschedules the deadline, so we
+                # just loop and recompute remaining instead of distinguishing.
+                self._wake.wait(remaining)
+                self._wake.clear()
+                if self._stop.is_set():
+                    break
+                # Deadline may have moved if the interval was changed.
+                if time.monotonic() < self._next_flush_at:
+                    continue
             try:
                 self._flush_once()
             except Exception:
                 log.exception("flush failed")
             finally:
-                self._next_flush_at = time.monotonic() + interval
+                self._next_flush_at = time.monotonic() + self._flush_interval
 
     def _flush_once(self) -> None:
         # Serialize manual ("Flush now" from the UI thread) and periodic flushes.

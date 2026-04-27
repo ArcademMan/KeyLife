@@ -1,4 +1,4 @@
-"""Settings tab: DB folder, autostart, start minimized."""
+"""Settings tab: DB folder, autostart, start minimized, flush interval."""
 
 from __future__ import annotations
 
@@ -12,11 +12,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from app.core.config import get_settings
+from app.service.daemon import KeyLifeDaemon
 from app.ui.qt import autostart, ui_state
 
 log = logging.getLogger(__name__)
@@ -35,9 +37,14 @@ def _section(title: str) -> tuple[QFrame, QVBoxLayout]:
 
 
 class SettingsPage(QWidget):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        daemon: KeyLifeDaemon | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._settings = get_settings()
+        self._daemon = daemon
         self._state = ui_state.load()
 
         root = QVBoxLayout(self)
@@ -45,6 +52,7 @@ class SettingsPage(QWidget):
         root.setSpacing(16)
 
         root.addWidget(self._db_section())
+        root.addWidget(self._flush_section())
         root.addWidget(self._startup_section())
         root.addStretch(1)
         root.addWidget(self._about_row())
@@ -63,6 +71,38 @@ class SettingsPage(QWidget):
         btn_row.addWidget(btn)
         btn_row.addStretch(1)
         lay.addLayout(btn_row)
+        return card
+
+    def _flush_section(self) -> QFrame:
+        card, lay = _section("Flush interval")
+
+        # Effective interval: live daemon value if available, else saved
+        # override, else the pydantic-settings default.
+        if self._daemon is not None:
+            current = int(round(self._daemon.flush_interval_seconds))
+        elif self._state.flush_interval_seconds is not None:
+            current = int(round(self._state.flush_interval_seconds))
+        else:
+            current = int(round(self._settings.flush_interval_seconds))
+
+        row = QHBoxLayout()
+        self.spin_flush = QSpinBox()
+        self.spin_flush.setRange(1, 3600)
+        self.spin_flush.setSuffix(" s")
+        self.spin_flush.setValue(max(1, min(3600, current)))
+        self.spin_flush.setFixedWidth(110)
+        self.spin_flush.editingFinished.connect(self._on_flush_committed)
+        row.addWidget(self.spin_flush)
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        hint = QLabel(
+            "How often the in-memory counters are written to the database. "
+            "Shorter values write more often; longer values batch more counts."
+        )
+        hint.setObjectName("muted")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
         return card
 
     def _startup_section(self) -> QFrame:
@@ -115,6 +155,16 @@ class SettingsPage(QWidget):
 
     def _on_minimized_toggled(self, checked: bool) -> None:
         self._state.start_minimized = checked
+        try:
+            ui_state.save(self._state)
+        except OSError:
+            log.exception("ui_state save failed")
+
+    def _on_flush_committed(self) -> None:
+        seconds = float(self.spin_flush.value())
+        if self._daemon is not None:
+            self._daemon.set_flush_interval(seconds)
+        self._state.flush_interval_seconds = seconds
         try:
             ui_state.save(self._state)
         except OSError:
