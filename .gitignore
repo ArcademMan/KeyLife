@@ -78,3 +78,4 @@ Desktop.ini
 # --- Personal build (cert + uiAccess), non distribuibili ------------------
 assets/codesign.cer
 installer_local.iss
+PERSONAL_BUILD.md
