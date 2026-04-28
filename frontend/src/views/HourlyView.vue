@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { api } from '../api'
 import { useRangeStore } from '../stores/range'
 import type { HourlyHeatmap } from '../types'
 import ChartBox from '../components/ChartBox.vue'
+
+console.log('[HourlyView] script setup running')
 
 const data = ref<HourlyHeatmap | null>(null)
 const loading = ref(true)
@@ -27,6 +29,55 @@ async function load() {
 
 onMounted(load)
 watch(params, load, { deep: true })
+
+// Live polling: every flush_interval (min 2s, like Dashboard) we hit the cheap
+// /summary endpoint and reload the heatmap only when all_time_total has bumped.
+// Why all_time_total and not session_total: session_total is the live in-memory
+// counter, it bumps on every keystroke, but the heatmap is sourced from the DB
+// — which only changes after a flush. all_time_total is read from the DB so it
+// bumps exactly when there's something new to show.
+// Skip the tick when the tab is hidden so a backgrounded browser stops costing.
+const lastAllTimeTotal = ref<number | null>(null)
+const pollIntervalSec = ref<number>(60)
+let pollTimer: number | undefined
+
+async function poll(): Promise<void> {
+  if (document.hidden) {
+    console.log('[HourlyView] poll skipped (tab hidden)')
+    return
+  }
+  console.log('[HourlyView] polling /summary…')
+  try {
+    const s = await api.summary()
+    pollIntervalSec.value = s.flush_interval_seconds
+    const bumped =
+      lastAllTimeTotal.value !== null &&
+      s.all_time_total > lastAllTimeTotal.value
+    console.log(
+      `[HourlyView] poll ok — all_time=${s.all_time_total} (last=${lastAllTimeTotal.value}) → ${bumped ? 'reload' : 'no change'}`,
+    )
+    if (bumped) await load()
+    lastAllTimeTotal.value = s.all_time_total
+  } catch (e) {
+    console.warn('[HourlyView] poll failed; will retry next tick', e)
+  }
+}
+
+watch(pollIntervalSec, (sec) => {
+  if (pollTimer) clearInterval(pollTimer)
+  const ms = Math.max(sec * 1000, 2000)
+  pollTimer = window.setInterval(poll, ms)
+}, { immediate: true })
+
+function onVisibility(): void { if (!document.hidden) poll() }
+onMounted(() => {
+  poll()
+  document.addEventListener('visibilitychange', onVisibility)
+})
+onBeforeUnmount(() => {
+  if (pollTimer) clearInterval(pollTimer)
+  document.removeEventListener('visibilitychange', onVisibility)
+})
 
 const HOURS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -59,6 +110,9 @@ const heatmapOption = computed(() => {
 
   return {
     backgroundColor: 'transparent',
+    // No fade-in: the chart re-renders on each poll tick and animation makes
+    // the canvas flicker on long ranges (thousands of cells).
+    animation: false,
     tooltip: {
       position: 'top',
       backgroundColor: '#0f172a',
@@ -257,6 +311,14 @@ function onHeatmapClick(p: any) {
 const isSingleDay = computed(() => {
   return params.value.start === params.value.end
 })
+
+// Heatmap height grows ~14px per day. Cap at 9000px so we stay under the
+// per-browser canvas size limit (~10–16k px) on multi-year ranges; the outer
+// scroll container handles overflow above ~70vh.
+const heatmapHeight = computed(() => {
+  const ideal = dates.value.length * 14 + 130
+  return Math.min(Math.max(ideal, 260), 9000) + 'px'
+})
 </script>
 
 <template>
@@ -282,11 +344,13 @@ const isSingleDay = computed(() => {
           ← back to 30d
         </button>
       </div>
-      <ChartBox
-        :option="heatmapOption"
-        :height="(Math.max(dates.length * 14 + 130, 260)) + 'px'"
-        @chart-click="onHeatmapClick"
-      />
+      <div class="overflow-auto" :style="{ maxHeight: '70vh' }">
+        <ChartBox
+          :option="heatmapOption"
+          :height="heatmapHeight"
+          @chart-click="onHeatmapClick"
+        />
+      </div>
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">

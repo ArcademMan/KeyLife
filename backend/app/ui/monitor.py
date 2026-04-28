@@ -19,6 +19,7 @@ from tkinter import ttk
 from app.core.config import get_settings
 from app.hook.events import EventKind, KeyEvent
 from app.hook.vk_codes import name as vk_name
+from app.hook.vk_codes import pretty_name as vk_pretty
 from app.service.daemon import KeyLifeDaemon, UiEventBridge
 
 
@@ -29,7 +30,7 @@ def _fmt_event(ev: KeyEvent) -> str:
     return (
         f"{ev.kind.value:>4}  "
         f"vk=0x{ev.vk:02X}  sc=0x{ev.scancode:03X}  "
-        f"{vk_name(ev.vk)}{flag_str}"
+        f"{vk_pretty(ev.vk, ev.scancode)} ({vk_name(ev.vk)}){flag_str}"
     )
 
 
@@ -135,7 +136,7 @@ class MonitorApp:
 
         col, reverse = self._sort_state
         rows = [
-            (vk, sc, vk_name(vk), cnt)
+            (vk, sc, vk_pretty(vk, sc), cnt)
             for (vk, sc), cnt in per_key.items()
         ]
         idx = {"vk": 0, "sc": 1, "name": 2, "count": 3}[col]

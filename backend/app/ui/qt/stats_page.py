@@ -272,8 +272,8 @@ class StatsPage(QWidget):
 
     def _fill_top(self, rows: list[tuple[int, int, int]]) -> None:
         self.tbl.setRowCount(len(rows))
-        for i, (vk, _sc, cnt) in enumerate(rows):
-            name = QTableWidgetItem(vk_pretty(vk))
+        for i, (vk, sc, cnt) in enumerate(rows):
+            name = QTableWidgetItem(vk_pretty(vk, sc))
             count = QTableWidgetItem(_fmt(cnt))
             count.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.tbl.setItem(i, 0, name)

@@ -95,8 +95,50 @@ _PRETTY_OVERRIDES: dict[str, str] = {
 }
 
 
-def pretty_name(vk: int) -> str:
-    """Human-friendly label, e.g. 'Space', 'Enter', 'F5', 'A', 'Numpad 3'."""
+_E0 = 0x100
+
+# (vk, extended) → label override. Disambiguates the few keys whose only
+# distinction is the Win32 E0 prefix once it has been folded into the
+# scancode (bit 0x100). For VKs that the hook reports as the *generic*
+# modifier (VK_CONTROL/VK_MENU), the E0 bit picks the right side; for VK
+# pairs already split by the OS (VK_LCONTROL/VK_RCONTROL etc.) these
+# overrides simply never trigger because we'd already use the L/R name.
+_EXT_OVERRIDES: dict[tuple[int, bool], str] = {
+    (0x0D, True): "Numpad Enter",  # VK_RETURN + E0
+    (0x11, False): "Left Ctrl",    # VK_CONTROL alone
+    (0x11, True): "Right Ctrl",
+    (0x12, False): "Left Alt",     # VK_MENU alone
+    (0x12, True): "AltGr",
+    # Numpad-with-NumLock-off variants: these arrive as the navigation VKs
+    # *without* the E0 flag (the cluster keys carry E0). The numpad makes
+    # use of the same VK without E0 → we tag them as "Numpad …" so they
+    # don't read as plain Home/End/etc.
+    (0x21, False): "Numpad PgUp",
+    (0x22, False): "Numpad PgDn",
+    (0x23, False): "Numpad End",
+    (0x24, False): "Numpad Home",
+    (0x25, False): "Numpad ←",
+    (0x26, False): "Numpad ↑",
+    (0x27, False): "Numpad →",
+    (0x28, False): "Numpad ↓",
+    (0x2D, False): "Numpad Ins",
+    (0x2E, False): "Numpad Del",
+    (0x0C, False): "Numpad 5",     # VK_CLEAR with NumLock off
+}
+
+
+def pretty_name(vk: int, scancode: int | None = None) -> str:
+    """Human-friendly label, e.g. 'Space', 'Enter', 'F5', 'A', 'Numpad 3'.
+
+    When scancode is provided, the E0 bit (0x100) disambiguates keys
+    that share VK + low byte — Numpad Enter vs Enter, Right Ctrl vs
+    Left Ctrl, AltGr vs Left Alt — and labels them accordingly.
+    """
+    if scancode is not None:
+        ext = bool(scancode & _E0)
+        ext_label = _EXT_OVERRIDES.get((vk, ext))
+        if ext_label is not None:
+            return ext_label
     raw = VK_NAMES.get(vk)
     if raw is None:
         return f"0x{vk:02X}"

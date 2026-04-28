@@ -31,12 +31,12 @@ class HookBridge(QObject):
     Qt event loop.
     """
 
-    keyDown = Signal(int)  # vk
+    keyDown = Signal(int, int)  # vk, scancode (with E0 bit folded in)
 
     def on_event(self, ev: KeyEvent) -> None:
         # Skip auto-repeat: a single physical press should pulse once.
         if ev.kind is EventKind.DOWN and not ev.is_repeat:
-            self.keyDown.emit(ev.vk)
+            self.keyDown.emit(ev.vk, ev.scancode)
 
 
 class KeyDisplay(QWidget):
@@ -66,8 +66,8 @@ class KeyDisplay(QWidget):
         self._anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         self._anim.valueChanged.connect(self._on_pulse)
 
-    def show_key(self, vk: int) -> None:
-        self._text = pretty_name(vk)
+    def show_key(self, vk: int, scancode: int = 0) -> None:
+        self._text = pretty_name(vk, scancode)
         self._anim.stop()
         self._anim.start()
 

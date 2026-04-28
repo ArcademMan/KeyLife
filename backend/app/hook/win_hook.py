@@ -371,11 +371,19 @@ class WindowsKeyboardHook:
         else:
             return
 
+        extended = bool(kb.Flags & RI_KEY_E0)
+        # Fold the E0 prefix into the scancode as bit 0x100. Without this,
+        # keys that share VKey + MakeCode and differ only by the E0 flag
+        # collapse into a single bucket downstream — most visibly Enter vs
+        # Numpad Enter (both vk=0x0D, makecode=0x1C), but also Ctrl L/R
+        # (sc=0x1D), Alt L / AltGr (sc=0x38), and the numpad nav cluster
+        # under NumLock-off. The 0x11C/0x11D/... encoding matches the
+        # convention already used by the Q6 HE layout JSON.
         ev = KeyEvent(
             kind=kind,
             vk=vk,
-            scancode=int(kb.MakeCode),
-            extended=bool(kb.Flags & RI_KEY_E0),
+            scancode=int(kb.MakeCode) | (0x100 if extended else 0),
+            extended=extended,
             timestamp_ms=int(time.time() * 1000),
             is_repeat=False,  # auto-repeat detection happens in the aggregator
         )

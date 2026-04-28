@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { api } from '../api'
 import { useRangeStore } from '../stores/range'
 import type { KeyboardHeatmap, KeyboardLayout, LayoutKey } from '../types'
 import ChartBox from '../components/ChartBox.vue'
 import { useHandmapStore, geometricHand } from '../stores/handmap'
+
+console.log('[KeyboardView] script setup running')
 
 const handmap = useHandmapStore()
 
@@ -37,6 +39,62 @@ async function load() {
 onMounted(load)
 watch(params, load, { deep: true })
 
+// Live polling: only the heatmap data needs re-fetching — the layout JSON is
+// static. Tick at flush_interval (min 2s), skip when the tab is hidden, and
+// short-circuit on /summary's all_time_total (DB-backed, bumps on flush) —
+// not on session_total (live counter, bumps on every keystroke and would
+// trigger a reload before the data has actually been flushed to disk).
+const lastAllTimeTotal = ref<number | null>(null)
+const pollIntervalSec = ref<number>(60)
+let pollTimer: number | undefined
+
+async function reloadHeatmap(): Promise<void> {
+  try {
+    data.value = await api.keyboard(params.value)
+    error.value = null
+  } catch (e: any) {
+    error.value = e?.message ?? 'failed to load'
+  }
+}
+
+async function poll(): Promise<void> {
+  if (document.hidden) {
+    console.log('[KeyboardView] poll skipped (tab hidden)')
+    return
+  }
+  console.log('[KeyboardView] polling /summary…')
+  try {
+    const s = await api.summary()
+    pollIntervalSec.value = s.flush_interval_seconds
+    const bumped =
+      lastAllTimeTotal.value !== null &&
+      s.all_time_total > lastAllTimeTotal.value
+    console.log(
+      `[KeyboardView] poll ok — all_time=${s.all_time_total} (last=${lastAllTimeTotal.value}) → ${bumped ? 'reload' : 'no change'}`,
+    )
+    if (bumped) await reloadHeatmap()
+    lastAllTimeTotal.value = s.all_time_total
+  } catch (e) {
+    console.warn('[KeyboardView] poll failed; will retry next tick', e)
+  }
+}
+
+watch(pollIntervalSec, (sec) => {
+  if (pollTimer) clearInterval(pollTimer)
+  const ms = Math.max(sec * 1000, 2000)
+  pollTimer = window.setInterval(poll, ms)
+}, { immediate: true })
+
+function onVisibility(): void { if (!document.hidden) poll() }
+onMounted(() => {
+  poll()
+  document.addEventListener('visibilitychange', onVisibility)
+})
+onBeforeUnmount(() => {
+  if (pollTimer) clearInterval(pollTimer)
+  document.removeEventListener('visibilitychange', onVisibility)
+})
+
 const KEY_UNIT_PX = 48
 const KEY_GAP_PX = 4
 
@@ -45,12 +103,29 @@ const keyboardHeight = computed(() => layout.value ? layout.value.height * KEY_U
 
 interface Tally { exact: Map<string, number>; perVk: Map<number, number> }
 
+// Raw Input on Windows sometimes reports the *generic* VK_SHIFT/VK_CONTROL/
+// VK_MENU (0x10/0x11/0x12) instead of the L/R-specific 0xA0..0xA5,
+// distinguishing the two sides only via the E0 extended flag (bit 0x100 of
+// the folded scancode) and the MakeCode. The layout JSON uses the L/R
+// codes, so without this remap AltGr / Right Ctrl / Right Shift end up in
+// a generic bucket that no layout key matches. Resolved at read time so
+// historical rows are also covered.
+function canonicalVk(vk: number, scancode: number): number {
+  const ext = (scancode & 0x100) !== 0
+  const make = scancode & 0xff
+  if (vk === 0x10) return make === 0x36 ? 0xA1 : 0xA0
+  if (vk === 0x11) return ext ? 0xA3 : 0xA2
+  if (vk === 0x12) return ext ? 0xA5 : 0xA4
+  return vk
+}
+
 const tallies = computed<Tally>(() => {
   const exact = new Map<string, number>()
   const perVk = new Map<number, number>()
   for (const k of data.value?.keys ?? []) {
-    exact.set(`${k.vk}:${k.scancode}`, k.count)
-    perVk.set(k.vk, (perVk.get(k.vk) ?? 0) + k.count)
+    const vk = canonicalVk(k.vk, k.scancode)
+    exact.set(`${vk}:${k.scancode}`, (exact.get(`${vk}:${k.scancode}`) ?? 0) + k.count)
+    perVk.set(vk, (perVk.get(vk) ?? 0) + k.count)
   }
   return { exact, perVk }
 })
@@ -195,7 +270,28 @@ const labelByVk = computed(() => {
   return map
 })
 
+// Pretty labels for VK names that the layout collapses on purpose. The
+// layout uses "Ctrl"/"Shift"/"Alt"/"Win" on the rectangles for visual
+// fidelity, which makes the "All keys" table ambiguous (two rows labeled
+// "Ctrl", two "Shift", etc.). For the table we override using the backend
+// `name` (which carries the L/R info as VK_LCONTROL/VK_RCONTROL/...).
+const VK_NAME_PRETTY: Record<string, string> = {
+  VK_LCONTROL: 'Left Ctrl',
+  VK_RCONTROL: 'Right Ctrl',
+  VK_LSHIFT:   'Left Shift',
+  VK_RSHIFT:   'Right Shift',
+  VK_LMENU:    'Left Alt',
+  VK_RMENU:    'AltGr',
+  VK_LWIN:     'Left Win',
+  VK_RWIN:     'Right Win',
+  VK_APPS:     'Menu',
+}
+
 function displayName(vk: number, scancode: number, name: string): string {
+  const pretty = VK_NAME_PRETTY[name]
+  if (pretty) return pretty
+  // Disambiguate Enter vs Numpad Enter via the E0 bit in the scancode.
+  if (name === 'VK_RETURN') return (scancode & 0x100) ? 'Numpad Enter' : 'Enter'
   return labelByExact.value.get(`${vk}:${scancode}`)
     ?? labelByVk.value.get(vk)
     ?? name.replace(/^VK_/, '')
@@ -212,16 +308,48 @@ interface KeyRow {
   pct: number
 }
 
+// VK → backend name lookup, used to recompute the `name` after vk
+// canonicalization so `displayName` lands on the right pretty label.
+const VK_TO_NAME: Record<number, string> = {
+  0xA0: 'VK_LSHIFT',   0xA1: 'VK_RSHIFT',
+  0xA2: 'VK_LCONTROL', 0xA3: 'VK_RCONTROL',
+  0xA4: 'VK_LMENU',    0xA5: 'VK_RMENU',
+}
+
 const allKeyRows = computed<KeyRow[]>(() => {
   const tot = totalPresses.value
-  const rows: KeyRow[] = (data.value?.keys ?? []).map(k => ({
-    vk: k.vk,
-    scancode: k.scancode,
-    rawName: k.name,
-    display: displayName(k.vk, k.scancode, k.name),
-    count: k.count,
-    pct: tot > 0 ? (k.count / tot) * 100 : 0,
-  }))
+  // Merge rows that resolve to the same human-visible label. Windows feeds
+  // us scancode variants we can't always tell apart in the data — most
+  // notably the phantom LCtrl that gets injected before AltGr on IT
+  // layouts, which arrives as VK_RCONTROL but with the AltGr scancode, or
+  // ghost events that share a VK with a different scancode tail. Without
+  // this merge each physical key can appear two or three times in the
+  // table with the same label and confusing scancode metadata; the
+  // heatmap already aggregates these under the canonical VK, so collapsing
+  // by displayName here keeps the two views consistent. Keys with
+  // intentionally distinct labels (Enter vs Numpad Enter, ↑ vs Numpad ↑
+  // when the layout disambiguates) are preserved.
+  const merged = new Map<string, KeyRow>()
+  for (const k of data.value?.keys ?? []) {
+    const vk = canonicalVk(k.vk, k.scancode)
+    const name = vk !== k.vk ? (VK_TO_NAME[vk] ?? k.name) : k.name
+    const display = displayName(vk, k.scancode, name)
+    const existing = merged.get(display)
+    if (existing) {
+      existing.count += k.count
+    } else {
+      merged.set(display, {
+        vk,
+        scancode: k.scancode,
+        rawName: name,
+        display,
+        count: k.count,
+        pct: 0,
+      })
+    }
+  }
+  const rows = Array.from(merged.values())
+  for (const r of rows) r.pct = tot > 0 ? (r.count / tot) * 100 : 0
   rows.sort((a, b) => b.count - a.count)
   return rows
 })
