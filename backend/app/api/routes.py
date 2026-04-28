@@ -44,8 +44,13 @@ def _today_iso() -> str:
 
 
 def _parse_range(start: str | None, end: str | None, default_days: int = 30) -> tuple[str, str]:
-    end_d = _date.fromisoformat(end) if end else _date.today()
-    start_d = _date.fromisoformat(start) if start else end_d - timedelta(days=default_days - 1)
+    try:
+        end_d = _date.fromisoformat(end) if end else _date.today()
+        start_d = _date.fromisoformat(start) if start else end_d - timedelta(days=default_days - 1)
+    except ValueError:
+        # Malformed input → 400, not 500. Without this, fromisoformat raises
+        # and bubbles up to the generic exception handler.
+        raise HTTPException(status_code=400, detail="invalid date (expected YYYY-MM-DD)")
     if start_d > end_d:
         raise HTTPException(status_code=400, detail="start must be <= end")
     if (end_d - start_d).days > 366 * 5:
