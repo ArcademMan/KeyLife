@@ -4,21 +4,37 @@ import { api } from '../api'
 
 const STORAGE_KEY = 'keylife.range.v1'
 
+// All date helpers must produce LOCAL calendar dates. The backend keys the
+// daily counters by `date.today()` in the host's local time, so the frontend
+// has to match — using UTC (toISOString) skews the picker by a day during
+// the local-vs-UTC offset window and can hide today's presses entirely.
+function isoLocal(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function parseIsoLocal(iso: string): Date {
+  const [y, m, d] = iso.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
 function isoToday(): string {
-  return new Date().toISOString().slice(0, 10)
+  return isoLocal(new Date())
 }
 
 function isoDaysAgo(n: number): string {
   const d = new Date()
   d.setDate(d.getDate() - n)
-  return d.toISOString().slice(0, 10)
+  return isoLocal(d)
 }
 
 function startOfMonth(offset = 0): string {
   const d = new Date()
   d.setDate(1)
   d.setMonth(d.getMonth() + offset)
-  return d.toISOString().slice(0, 10)
+  return isoLocal(d)
 }
 
 function endOfMonth(offset = 0): string {
@@ -26,18 +42,18 @@ function endOfMonth(offset = 0): string {
   d.setDate(1)
   d.setMonth(d.getMonth() + offset + 1)
   d.setDate(0)
-  return d.toISOString().slice(0, 10)
+  return isoLocal(d)
 }
 
 function daysBetween(a: string, b: string): number {
-  const ms = new Date(b).getTime() - new Date(a).getTime()
+  const ms = parseIsoLocal(b).getTime() - parseIsoLocal(a).getTime()
   return Math.round(ms / 86_400_000) + 1
 }
 
 function shiftIso(iso: string, days: number): string {
-  const d = new Date(iso)
+  const d = parseIsoLocal(iso)
   d.setDate(d.getDate() + days)
-  return d.toISOString().slice(0, 10)
+  return isoLocal(d)
 }
 
 export type PresetId = 'today' | 'yesterday' | '7d' | '30d' | '90d' | '1y'

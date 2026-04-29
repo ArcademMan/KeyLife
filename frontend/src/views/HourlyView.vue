@@ -82,9 +82,12 @@ onBeforeUnmount(() => {
 const HOURS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
-// 0 = Monday … 6 = Sunday
+// 0 = Monday … 6 = Sunday. Parse as a local date — `new Date('YYYY-MM-DD')`
+// is UTC midnight, which lands on the previous day in negative-offset TZs and
+// would mis-shelve cells.
 function isoWeekday(iso: string): number {
-  return (new Date(iso).getDay() + 6) % 7
+  const [y, m, d] = iso.split('-').map(Number)
+  return (new Date(y, m - 1, d).getDay() + 6) % 7
 }
 
 const dates = computed(() => {
