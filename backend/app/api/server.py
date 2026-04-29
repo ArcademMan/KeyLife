@@ -134,6 +134,9 @@ def build_app(daemon: KeyLifeDaemon | None = None) -> FastAPI:
         if owned:
             d.start()
         app.state.aggregator = d.aggregator
+        # Esposto perché /api/settings/per-app deve poter chiamare
+        # `refresh_per_app_state()` quando l'utente cambia il toggle.
+        app.state.daemon = d
         try:
             yield
         finally:

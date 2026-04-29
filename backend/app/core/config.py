@@ -15,6 +15,20 @@ from app.core.paths import BACKEND_DIR, user_data_dir
 # it means no real key was provisioned — we refuse to use it.
 _PLACEHOLDER_SECRET = "dev-insecure-change-me"  # noqa: S105
 
+# Sentinel per la chiave del DB. get_settings() la sovrascrive sempre con il
+# valore caricato dal Credential Manager (o appena generato): se questa
+# costante arriva fino a SQLCipher significa che get_settings() è stato
+# bypassato e ci rifiutiamo di aprire il DB.
+_PLACEHOLDER_DB_KEY = "0" * 64  # noqa: S105
+
+# Slot del Credential Manager dove vive la chiave del DB.
+# username fisso, service-name diverso fra dev e build frozen così che
+# checkout sorgente e exe installato non si rigenerino la chiave a vicenda
+# rendendo illeggibile il DB dell'altro.
+_KEYRING_USERNAME = "db"
+_KEYRING_SERVICE_FROZEN = "KeyLife"
+_KEYRING_SERVICE_DEV = "KeyLife-dev"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -41,6 +55,11 @@ class Settings(BaseSettings):
     # → KEYLIFE_SECRET_KEY env var → freshly generated file. The placeholder
     # below is a sentinel — get_settings() refuses to return it.
     secret_key: SecretStr = SecretStr(_PLACEHOLDER_SECRET)
+
+    # Chiave a 256 bit per SQLCipher, hex-encoded (64 char). Risolta in
+    # get_settings() leggendo il Windows Credential Manager (o generandola
+    # al primo avvio). Mai letta da env o da file: vive solo nel keychain.
+    db_key: SecretStr = SecretStr(_PLACEHOLDER_DB_KEY)
 
     @property
     def db_path(self) -> Path:
@@ -101,11 +120,56 @@ def _generate_secret_key_file() -> str:
         ) from None
 
 
+def _keyring_service() -> str:
+    return _KEYRING_SERVICE_FROZEN if getattr(sys, "frozen", False) else _KEYRING_SERVICE_DEV
+
+
+def _load_db_key() -> str | None:
+    """Read the DB key from Windows Credential Manager.
+
+    Returns None if the entry doesn't exist OR if any keyring backend error
+    happens — the caller decides whether that's "first run, generate one"
+    or "configured DB exists but key is gone, abort".
+    """
+    try:
+        import keyring
+        from keyring.errors import KeyringError
+    except ImportError:
+        return None
+    try:
+        v = keyring.get_password(_keyring_service(), _KEYRING_USERNAME)
+    except KeyringError:
+        return None
+    return v or None
+
+
+def _generate_db_key() -> str:
+    """Generate 256 bit di entropia, salvali nel Credential Manager, restituisci hex.
+
+    Hex form (64 char) viene consumato da SQLCipher come raw key:
+    `PRAGMA key = "x'...'"` salta il PBKDF2 di derivazione (non ne abbiamo
+    bisogno con una chiave random ad alta entropia) ed evita problemi di
+    quoting/encoding sul valore della PRAGMA.
+    """
+    import keyring
+    token = secrets.token_hex(32)
+    keyring.set_password(_keyring_service(), _KEYRING_USERNAME, token)
+    return token
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    # Precedence: backend/.secret_key file → KEYLIFE_SECRET_KEY env var
-    # (handled natively by pydantic-settings) → freshly generated file.
-    overrides: dict[str, object] = {}
+    # DB key first: se il Credential Manager è rotto/inaccessibile è meglio
+    # saperlo prima di toccare data_dir o di scrivere il .secret_key.
+    db_key_raw = _load_db_key()
+    if db_key_raw is None:
+        db_key_raw = _generate_db_key()
+    if not db_key_raw or db_key_raw == _PLACEHOLDER_DB_KEY:
+        raise RuntimeError("failed to provision a DB encryption key")
+
+    # Precedence per secret_key: backend/.secret_key file → KEYLIFE_SECRET_KEY
+    # env var (handled natively by pydantic-settings) → freshly generated file.
+    overrides: dict[str, object] = {"db_key": SecretStr(db_key_raw)}
     sk = _load_secret_key_file()
     if sk and sk != _PLACEHOLDER_SECRET:
         overrides["secret_key"] = SecretStr(sk)
@@ -116,7 +180,7 @@ def get_settings() -> Settings:
     if s.secret_key.get_secret_value() == _PLACEHOLDER_SECRET:
         # No file, no env var — generate one and reload.
         token = _generate_secret_key_file()
-        s = Settings(secret_key=SecretStr(token))
+        s = Settings(secret_key=SecretStr(token), db_key=SecretStr(db_key_raw))
         s.data_dir.mkdir(parents=True, exist_ok=True)
 
     return s

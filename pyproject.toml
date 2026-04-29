@@ -16,6 +16,18 @@ dependencies = [
     "PySide6>=6.6",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
+    # Encryption-at-rest del DB. sqlcipher3 impacchetta libsqlcipher statica
+    # nel .pyd su Windows: niente DLL extra da bundlare. Pin minor stretto
+    # per evitare break silenziosi del cipher format su upgrade transitivi.
+    "sqlcipher3>=0.6,<0.7",
+    # Storage della chiave del DB nel Windows Credential Manager via DPAPI
+    # (backend WinVaultKeyring). Tenere la chiave fuori da data_dir è il
+    # punto: protegge contro la copia del solo data_dir.
+    "keyring>=25",
+    # Conversione delle icone HICON estratte da exe Win32 a PNG (BLOB nel DB).
+    # Pillow è la via più corta: alternativa pure-ctypes richiederebbe ~200
+    # righe di GDI per gestire i piani alfa premoltiplicati.
+    "Pillow>=10",
 ]
 
 [project.scripts]

@@ -52,3 +52,55 @@ class KeyboardHeatmapResponse(BaseModel):
     start: str
     end: str
     keys: list[KeyCount]
+
+
+# --- Per-app tracking ---------------------------------------------------
+
+class PerAppSettingsModel(BaseModel):
+    tracking_enabled: bool
+    blocklist: list[str]
+
+
+class PerAppSettingsUpdate(BaseModel):
+    """PUT body. Tutti i campi sono opzionali: omettere = lascia invariato.
+
+    `blocklist` è normalizzata server-side (lowercase + dedup) ed è la fonte
+    di verità: il frontend deve fare PUT con la lista nuova completa, non
+    un diff.
+    """
+    tracking_enabled: bool | None = None
+    blocklist: list[str] | None = None
+
+
+class AppCount(BaseModel):
+    exe_name: str
+    count: int
+    has_icon: bool
+
+
+class AppsSummaryResponse(BaseModel):
+    start: str
+    end: str
+    apps: list[AppCount]
+
+
+class AppHourlyCell(BaseModel):
+    date: str
+    hour: int = Field(ge=0, le=23)
+    exe_name: str
+    count: int
+
+
+class AppsHourlyResponse(BaseModel):
+    start: str
+    end: str
+    cells: list[AppHourlyCell]
+
+
+class ForgetAppRequest(BaseModel):
+    exe_name: str
+
+
+class ForgetAppResponse(BaseModel):
+    exe_name: str
+    rows_deleted: int

@@ -6,6 +6,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/keyboard', name: 'keyboard', component: () => import('./views/KeyboardView.vue') },
   { path: '/calendar', name: 'calendar', component: () => import('./views/CalendarView.vue') },
   { path: '/hourly', name: 'hourly', component: () => import('./views/HourlyView.vue') },
+  { path: '/apps', name: 'apps', component: () => import('./views/AppsView.vue') },
   { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
 ]
 

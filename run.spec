@@ -100,6 +100,30 @@ a = Analysis(
         *collect_submodules('starlette'),
         *collect_submodules('anyio'),
         *collect_submodules('h11'),
+        # SQLCipher: il .pyd con libsqlcipher statica viene incluso
+        # automaticamente, ma il package usa import lazy del submodulo
+        # dbapi2 — esplicitiamolo per non rischiare un MissingModule.
+        'sqlcipher3',
+        'sqlcipher3.dbapi2',
+        # keyring: il backend giusto su Windows (WinVaultKeyring) è
+        # selezionato dinamicamente a runtime via entry_points; PyInstaller
+        # non li vede senza help. Includiamo l'intero subtree dei backend.
+        'keyring',
+        'keyring.backend',
+        'keyring.backends',
+        *collect_submodules('keyring.backends'),
+        # WinVaultKeyring chiama in pywin32 → win32cred per parlare con il
+        # Credential Manager. Senza questo la prima keyring.set_password
+        # fallisce con NoKeyringError dentro al bundle.
+        'win32cred',
+        'win32ctypes',
+        'pywintypes',
+        # Pillow per il rendering delle icone exe → PNG. _imaging è il
+        # modulo C nativo, gli altri spesso si importano dinamicamente.
+        'PIL',
+        'PIL.Image',
+        'PIL._imaging',
+        *collect_submodules('PIL'),
     ],
     hookspath=[],
     hooksconfig={},

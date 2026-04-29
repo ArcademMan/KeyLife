@@ -68,3 +68,40 @@ export interface KeyboardLayout {
   notes?: string
   keys: LayoutKey[]
 }
+
+// --- Per-app tracking ---------------------------------------------------
+
+export interface PerAppSettings {
+  tracking_enabled: boolean
+  blocklist: string[]
+}
+
+export interface AppCount {
+  exe_name: string
+  count: number
+  has_icon: boolean
+}
+
+export interface AppsSummary {
+  start: string
+  end: string
+  apps: AppCount[]
+}
+
+export interface AppHourlyCell {
+  date: string
+  hour: number
+  exe_name: string
+  count: number
+}
+
+export interface AppsHourly {
+  start: string
+  end: string
+  cells: AppHourlyCell[]
+}
+
+export interface ForgetAppResult {
+  exe_name: string
+  rows_deleted: number
+}

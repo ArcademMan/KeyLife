@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import date as _date, timedelta
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from app.aggregator.buffer import Aggregator
 from app.core.config import get_settings
@@ -11,20 +12,35 @@ from app.core.paths import BACKEND_DIR
 from app.hook.vk_codes import name as vk_name
 from app.storage.repository import (
     all_time_total_and_first_date,
+    apps_hourly_range,
+    apps_summary_range,
     daily_totals_range,
+    forget_app,
+    get_app_icon,
+    get_per_app_settings,
     hourly_matrix_range,
     keys_in_range,
+    list_apps_with_icons,
+    set_per_app_settings,
     today_total,
     top_keys_range,
 )
 from app.storage.session import get_sessionmaker
 
 from .schemas import (
+    AppCount,
+    AppHourlyCell,
+    AppsHourlyResponse,
+    AppsSummaryResponse,
     DailyTotal,
+    ForgetAppRequest,
+    ForgetAppResponse,
     HourlyCell,
     HourlyHeatmapResponse,
     KeyboardHeatmapResponse,
     KeyCount,
+    PerAppSettingsModel,
+    PerAppSettingsUpdate,
     SummaryResponse,
     TimelineResponse,
     TopKeysResponse,
@@ -140,3 +156,141 @@ def keyboard_layout() -> dict:
     if not _LAYOUT_PATH.is_file():
         raise HTTPException(status_code=500, detail="layout file missing")
     return json.loads(_LAYOUT_PATH.read_text(encoding="utf-8"))
+
+
+# ---- Per-app tracking endpoints ----------------------------------------
+
+# Limite duro su quante voci accettiamo nella blocklist via API: l'utente
+# non ne avrà mai più di una manciata, ma evita che un client buggato
+# saturi la kv table con MB di JSON. 256 è una soglia comoda.
+_MAX_BLOCKLIST_LEN = 256
+_MAX_EXE_NAME_LEN = 260  # MAX_PATH
+
+
+def _validate_exe_name(name: str) -> str:
+    name = name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="exe_name is required")
+    if len(name) > _MAX_EXE_NAME_LEN:
+        raise HTTPException(status_code=400, detail="exe_name too long")
+    return name
+
+
+@router.get("/settings/per-app", response_model=PerAppSettingsModel)
+def per_app_settings_get() -> PerAppSettingsModel:
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as session:
+        s = get_per_app_settings(session)
+    return PerAppSettingsModel(
+        tracking_enabled=s.tracking_enabled,
+        blocklist=list(s.blocklist),
+    )
+
+
+@router.put("/settings/per-app", response_model=PerAppSettingsModel)
+def per_app_settings_put(
+    body: PerAppSettingsUpdate, request: Request,
+) -> PerAppSettingsModel:
+    if body.blocklist is not None:
+        if len(body.blocklist) > _MAX_BLOCKLIST_LEN:
+            raise HTTPException(status_code=400, detail="blocklist too large")
+        for item in body.blocklist:
+            if not isinstance(item, str) or len(item) > _MAX_EXE_NAME_LEN:
+                raise HTTPException(status_code=400, detail="invalid blocklist entry")
+
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as session:
+        new_state = set_per_app_settings(
+            session,
+            tracking_enabled=body.tracking_enabled,
+            blocklist=body.blocklist,
+        )
+
+    # Hot-reload nel daemon: senza questo il cambio resta solo nel DB e
+    # diventa effettivo solo al prossimo riavvio.
+    daemon = getattr(request.app.state, "daemon", None)
+    if daemon is not None:
+        try:
+            daemon.refresh_per_app_state()
+        except Exception:
+            # Logghiamo ma non rompiamo la PUT: il setting è salvato e si
+            # applica al prossimo restart anche se l'hot-reload fallisce.
+            import logging as _logging
+            _logging.getLogger(__name__).exception("daemon refresh failed")
+
+    return PerAppSettingsModel(
+        tracking_enabled=new_state.tracking_enabled,
+        blocklist=list(new_state.blocklist),
+    )
+
+
+@router.get("/apps/summary", response_model=AppsSummaryResponse)
+def apps_summary(
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> AppsSummaryResponse:
+    s, e = _parse_range(start, end, default_days=30)
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as session:
+        rows = apps_summary_range(session, s, e, limit=limit)
+        with_icons = set(list_apps_with_icons(session))
+    apps = [
+        AppCount(exe_name=exe, count=cnt, has_icon=exe in with_icons)
+        for exe, cnt in rows
+    ]
+    return AppsSummaryResponse(start=s, end=e, apps=apps)
+
+
+@router.get("/apps/hourly", response_model=AppsHourlyResponse)
+def apps_hourly(
+    start: str | None = Query(default=None),
+    end: str | None = Query(default=None),
+    exe_name: str | None = Query(default=None, max_length=_MAX_EXE_NAME_LEN),
+) -> AppsHourlyResponse:
+    s, e = _parse_range(start, end, default_days=30)
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as session:
+        rows = apps_hourly_range(session, s, e, exe_name=exe_name)
+    cells = [
+        AppHourlyCell(date=d, hour=h, exe_name=exe, count=c)
+        for d, h, exe, c in rows
+    ]
+    return AppsHourlyResponse(start=s, end=e, cells=cells)
+
+
+@router.get("/app-icons/{exe_name}")
+def app_icon(exe_name: str, request: Request) -> Response:
+    name = _validate_exe_name(exe_name)
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as session:
+        icon = get_app_icon(session, name.lower())
+    if icon is None:
+        raise HTTPException(status_code=404, detail="icon not found")
+    png, fetched_at = icon
+    # ETag dal contenuto: se l'icona viene re-estratta con bytes diversi
+    # cambia. Niente collisioni con altri exe perché il PNG include il
+    # nome implicitly via la differenza dei pixel.
+    etag = '"' + hashlib.sha256(png).hexdigest()[:16] + '"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304)
+    return Response(
+        content=png,
+        media_type="image/png",
+        headers={
+            "ETag": etag,
+            # 5 minuti: bilanciamo cache hit con la possibilità che il
+            # worker rigeneri l'icona (cambio di versione dell'app).
+            "Cache-Control": "private, max-age=300",
+            "X-Fetched-At": fetched_at,
+        },
+    )
+
+
+@router.post("/apps/forget", response_model=ForgetAppResponse)
+def apps_forget(body: ForgetAppRequest) -> ForgetAppResponse:
+    name = _validate_exe_name(body.exe_name).lower()
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as session:
+        n = forget_app(session, name)
+    return ForgetAppResponse(exe_name=name, rows_deleted=n)

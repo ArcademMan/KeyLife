@@ -18,6 +18,7 @@ const nav: NavItem[] = [
   { to: '/keyboard',  label: 'Keyboard',  icon: '⌨', subtitle: 'Per-key heatmap' },
   { to: '/calendar',  label: 'Calendar',  icon: '▦', subtitle: 'Daily totals over time' },
   { to: '/hourly',    label: 'Hourly',    icon: '◴', subtitle: 'Day × hour heatmap' },
+  { to: '/apps',      label: 'Apps',      icon: '◫', subtitle: 'Per-application counts' },
 ]
 
 const settingsItem: NavItem = {

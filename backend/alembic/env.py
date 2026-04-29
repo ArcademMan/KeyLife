@@ -5,7 +5,7 @@ from logging.config import fileConfig
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, event, pool
 
 # Make `app` importable when running `alembic` from backend/
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -38,12 +38,33 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    # Alembic apre il DB con un engine indipendente da quello di
+    # session.py: deve quindi sapere anche lui che il DB è cifrato. Stesso
+    # pattern di session.py — creator + PRAGMA key come primo statement.
+    import sqlcipher3.dbapi2 as sqlcipher_dbapi
+    from app.storage.encryption import open_sqlcipher
+
+    db_path = str(settings.db_path)
+
+    def _creator():
+        return open_sqlcipher(db_path)
+
     cfg_section = config.get_section(config.config_ini_section) or {}
     connectable = engine_from_config(
         cfg_section,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        module=sqlcipher_dbapi,
+        creator=_creator,
     )
+
+    @event.listens_for(connectable, "connect")
+    def _apply_key(dbapi_conn, _record) -> None:  # noqa: ANN001
+        cur = dbapi_conn.cursor()
+        hex_key = settings.db_key.get_secret_value()
+        cur.execute(f"PRAGMA key = \"x'{hex_key}'\"")
+        cur.close()
+
     with connectable.connect() as connection:
         context.configure(
             connection=connection,
