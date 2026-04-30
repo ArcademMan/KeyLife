@@ -1,0 +1,81 @@
+# --- Secrets & env ---------------------------------------------------------
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.secret_key
+*.secret_key
+secrets.*
+*.pem
+*.key
+*.pfx
+*.p12
+credentials.json
+
+# --- Python ----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- Virtualenvs -----------------------------------------------------------
+.venv/
+venv/
+env/
+
+# --- IDE / editor ----------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# --- Build artifacts -------------------------------------------------------
+build/
+dist/
+frontend/dist/
+installer_output/
+*.spec.bak
+
+# --- Frontend --------------------------------------------------------------
+node_modules/
+frontend/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# --- Database & user data (privacy-sensitive: contiene conteggi tasti) ----
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+*.db-wal
+*.db-shm
+data/
+backend/data/
+
+# --- Logs ------------------------------------------------------------------
+*.log
+logs/
+
+# --- OS --------------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# --- Claude Code local settings (può contenere path/permessi locali) ------
+.claude/settings.local.json
+
+# --- Personal build (cert + uiAccess), non distribuibili ------------------
+assets/codesign.cer
+installer_local.iss
+PERSONAL_BUILD.md
