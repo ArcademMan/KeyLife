@@ -104,3 +104,47 @@ class ForgetAppRequest(BaseModel):
 class ForgetAppResponse(BaseModel):
     exe_name: str
     rows_deleted: int
+
+
+# --- Backup ---------------------------------------------------------------
+
+class BackupConfigModel(BaseModel):
+    enabled: bool
+    interval_hours: int = Field(ge=1, le=720)
+    keep_n: int = Field(ge=1, le=365)
+    dir: str | None
+    resolved_dir: str           # path effettivo, per UI ("ho capito dove finiscono")
+    has_passphrase: bool
+    last_backup_at: str | None
+    restore_pending: bool       # True se c'è un restore staged in attesa di riavvio
+
+
+class BackupConfigUpdate(BaseModel):
+    """Patch della config. Campi omessi → invariati. `dir=""` → torna al default."""
+    enabled: bool | None = None
+    interval_hours: int | None = Field(default=None, ge=1, le=720)
+    keep_n: int | None = Field(default=None, ge=1, le=365)
+    dir: str | None = None       # discriminato in routes: usiamo un sentinel "__unset__"
+
+
+class PassphraseSetRequest(BaseModel):
+    """Set/change passphrase. `old_passphrase` richiesto solo se ne esiste già una."""
+    new_passphrase: str = Field(min_length=8, max_length=1024)
+    old_passphrase: str | None = None
+
+
+class PassphraseDeleteRequest(BaseModel):
+    """Cancella envelope. Richiede la passphrase corrente come conferma anti-fat-finger."""
+    passphrase: str
+
+
+class BackupInfoModel(BaseModel):
+    filename: str
+    size: int
+    created_at: str
+
+
+class RestoreStagedResponse(BaseModel):
+    staged_at: str
+    source_filename: str
+    restart_required: bool = True

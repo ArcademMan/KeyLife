@@ -61,3 +61,30 @@ export function fmtIsoDdMmYyyy(iso: string): string {
   const [y, m, d] = iso.split('-')
   return `${d}/${m}/${y}`
 }
+
+// "Just now" / "3 min ago" / "2 h ago" / "yesterday" / "3 d ago" / "DD/MM/YYYY"
+// for older. Input is an ISO 8601 UTC timestamp. Returns a localized-ish
+// English string; we don't have a real i18n layer.
+export function relativeTimeAgo(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const then = Date.parse(iso)
+  if (Number.isNaN(then)) return '—'
+  const diffSec = Math.max(0, (Date.now() - then) / 1000)
+  if (diffSec < 45) return 'just now'
+  if (diffSec < 60 * 2) return '1 min ago'
+  if (diffSec < 60 * 60) return `${Math.round(diffSec / 60)} min ago`
+  if (diffSec < 60 * 60 * 2) return '1 h ago'
+  if (diffSec < 60 * 60 * 24) return `${Math.round(diffSec / 3600)} h ago`
+  if (diffSec < 60 * 60 * 24 * 2) return 'yesterday'
+  if (diffSec < 60 * 60 * 24 * 7) return `${Math.round(diffSec / 86400)} d ago`
+  const d = new Date(then)
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`
+}
+
+// "1.2 MB" / "456 KB" / "789 B". Decimal units, not binary.
+export function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}

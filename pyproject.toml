@@ -16,6 +16,10 @@ dependencies = [
     "PySide6>=6.6",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
+    # multipart/form-data parsing per /api/backups/restore (upload del .zip).
+    # FastAPI non lo include come dep transitiva: senza, `File(...)`/`Form(...)`
+    # crashano al primo upload.
+    "python-multipart>=0.0.9",
     # Encryption-at-rest del DB. sqlcipher3 impacchetta libsqlcipher statica
     # nel .pyd su Windows: niente DLL extra da bundlare. Pin minor stretto
     # per evitare break silenziosi del cipher format su upgrade transitivi.
@@ -28,6 +32,12 @@ dependencies = [
     # Pillow è la via più corta: alternativa pure-ctypes richiederebbe ~200
     # righe di GDI per gestire i piani alfa premoltiplicati.
     "Pillow>=10",
+    # AES-256-GCM + scrypt per il key-wrapping dei backup (la chiave DB viene
+    # wrappata con una passphrase utente per consentire restore portable).
+    # Stdlib non offre AEAD: rollare a mano AES+HMAC è la strada con più
+    # superficie di errore in tutto il progetto. `cryptography` è il pacchetto
+    # standard de-facto, già pinato dal resto dell'ecosistema.
+    "cryptography>=42",
 ]
 
 [project.scripts]

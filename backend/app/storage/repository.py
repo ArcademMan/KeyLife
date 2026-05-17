@@ -440,3 +440,129 @@ def set_per_app_settings(
         _kv_set(session, _KEY_BLOCKLIST, json.dumps(normalized))
     session.commit()
     return get_per_app_settings(session)
+
+
+# ---- Backup settings (encrypted-with-passphrase auto-backup) ------------
+
+_KEY_BACKUP_ENABLED = "backup_enabled"
+_KEY_BACKUP_INTERVAL_HOURS = "backup_interval_hours"
+_KEY_BACKUP_KEEP_N = "backup_keep_n"
+_KEY_BACKUP_DIR = "backup_dir"
+_KEY_BACKUP_ENVELOPE = "backup_envelope"        # JSON envelope or absent
+_KEY_BACKUP_LAST_AT = "backup_last_at"          # ISO 8601 UTC
+
+# Default conservativi: backup giornaliero, 7 di retention. Cambiabili da UI.
+_DEFAULT_INTERVAL_HOURS = 24
+_DEFAULT_KEEP_N = 7
+
+
+class _Unset:
+    """Sentinel: argument non passato (distinto da passato esplicitamente a None)."""
+    __slots__ = ()
+
+
+_UNSET: _Unset = _Unset()
+
+
+@dataclass(frozen=True)
+class BackupConfig:
+    enabled: bool
+    interval_hours: int
+    keep_n: int
+    dir: str | None                  # None → caller usa <data_dir>/backups/
+    has_passphrase: bool             # se True esiste un envelope wrappato
+    last_backup_at: str | None       # ISO 8601 UTC
+
+
+def _parse_int_or(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def get_backup_config(session: Session) -> BackupConfig:
+    enabled_raw = _kv_get(session, _KEY_BACKUP_ENABLED)
+    return BackupConfig(
+        enabled=(enabled_raw == "1"),
+        interval_hours=_parse_int_or(
+            _kv_get(session, _KEY_BACKUP_INTERVAL_HOURS), _DEFAULT_INTERVAL_HOURS,
+        ),
+        keep_n=_parse_int_or(
+            _kv_get(session, _KEY_BACKUP_KEEP_N), _DEFAULT_KEEP_N,
+        ),
+        dir=_kv_get(session, _KEY_BACKUP_DIR),
+        has_passphrase=(_kv_get(session, _KEY_BACKUP_ENVELOPE) is not None),
+        last_backup_at=_kv_get(session, _KEY_BACKUP_LAST_AT),
+    )
+
+
+def get_backup_envelope(session: Session) -> dict | None:
+    raw = _kv_get(session, _KEY_BACKUP_ENVELOPE)
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Envelope corrotto: trattalo come assente per non bloccare l'utente.
+        # Il prossimo set_backup_envelope() lo ripristina pulito.
+        return None
+
+
+def set_backup_envelope(session: Session, envelope: dict | None) -> None:
+    """Scrive un nuovo envelope, o lo cancella se `None`.
+
+    Cancellare l'envelope è esplicitamente supportato: l'utente "dimentica
+    la passphrase" o vuole rinunciare al backup. Cancella *non* il backup
+    file esistente sul disco, solo la chiave wrappata.
+    """
+    if envelope is None:
+        session.execute(delete(AppSetting).where(AppSetting.key == _KEY_BACKUP_ENVELOPE))
+    else:
+        _kv_set(session, _KEY_BACKUP_ENVELOPE, json.dumps(envelope))
+    session.commit()
+
+
+def set_backup_config(
+    session: Session,
+    enabled: bool | None = None,
+    interval_hours: int | None = None,
+    keep_n: int | None = None,
+    dir: str | None = _UNSET,  # type: ignore[assignment]
+) -> BackupConfig:
+    """Aggiorna config; campi None = invariati. `dir=""` o `dir=None` cancella l'override.
+
+    `dir` ha tre stati: non passato (default `_UNSET`, invariato), passato
+    a `None`/`""` (cancella l'override e torna al default `<data_dir>/backups/`),
+    o passato a una stringa (imposta path custom). Per `enabled`,
+    `interval_hours`, `keep_n` usiamo `None` come "non passato" perché
+    nessuno ha senso a None come valore reale.
+    """
+    if enabled is not None:
+        _kv_set(session, _KEY_BACKUP_ENABLED, "1" if enabled else "0")
+    if interval_hours is not None:
+        if interval_hours < 1:
+            raise ValueError("interval_hours must be >= 1")
+        if interval_hours > 24 * 30:
+            raise ValueError("interval_hours must be <= 720 (30 days)")
+        _kv_set(session, _KEY_BACKUP_INTERVAL_HOURS, str(interval_hours))
+    if keep_n is not None:
+        if keep_n < 1:
+            raise ValueError("keep_n must be >= 1")
+        if keep_n > 365:
+            raise ValueError("keep_n must be <= 365")
+        _kv_set(session, _KEY_BACKUP_KEEP_N, str(keep_n))
+    if dir is not _UNSET:
+        if not dir:
+            session.execute(delete(AppSetting).where(AppSetting.key == _KEY_BACKUP_DIR))
+        else:
+            _kv_set(session, _KEY_BACKUP_DIR, dir)
+    session.commit()
+    return get_backup_config(session)
+
+
+def mark_backup_done(session: Session, when_iso_utc: str) -> None:
+    _kv_set(session, _KEY_BACKUP_LAST_AT, when_iso_utc)
+    session.commit()

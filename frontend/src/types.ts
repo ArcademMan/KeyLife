@@ -105,3 +105,36 @@ export interface ForgetAppResult {
   exe_name: string
   rows_deleted: number
 }
+
+// --- Backup -------------------------------------------------------------
+
+export interface BackupConfig {
+  enabled: boolean
+  interval_hours: number
+  keep_n: number
+  dir: string | null
+  resolved_dir: string
+  has_passphrase: boolean
+  last_backup_at: string | null
+  restore_pending: boolean
+}
+
+export interface BackupConfigPatch {
+  enabled?: boolean
+  interval_hours?: number
+  keep_n?: number
+  // `null` o `""` → reset al default. Omettere → invariato.
+  dir?: string | null
+}
+
+export interface BackupInfo {
+  filename: string
+  size: number
+  created_at: string
+}
+
+export interface RestoreStaged {
+  staged_at: string
+  source_filename: string
+  restart_required: boolean
+}

@@ -30,6 +30,29 @@ if not getattr(sys, "frozen", False) and str(BACKEND) not in sys.path:
     sys.path.insert(0, str(BACKEND))
 
 
+def _apply_restore_if_pending() -> None:
+    """Se l'utente ha staged un restore via UI, swappa il DB prima di tutto.
+
+    Da chiamare PRIMA di `_ensure_db_state()`: la swap cambia anche la chiave
+    nel keychain, e `get_settings()` deve poterla rileggere. Per questo
+    chiamiamo `cache_clear()` se il restore applica.
+    """
+    from app.core.config import get_settings
+    from app.storage.backup import apply_pending_restore
+
+    settings = get_settings()
+    if apply_pending_restore(settings.data_dir, settings.db_path):
+        # La nuova chiave è nello slot canonico ora: invalida la cache
+        # perché Settings ha catturato la vecchia chiave (era stata letta
+        # all'inizio di questa funzione).
+        get_settings.cache_clear()
+        print(
+            f"[keylife] Restore applicato dal backup. DB precedente salvato a "
+            f"{settings.db_path}.pre-restore.bak",
+            file=sys.stderr,
+        )
+
+
 def _ensure_db_state() -> None:
     """Pre-flight di cifratura, prima che chiunque apra una connessione.
 
@@ -102,6 +125,9 @@ def main() -> int:
     # Order matters: lo stato cifrato deve essere risolto PRIMA che alembic
     # apra il suo engine. Se troviamo plaintext lo ricifriamo a `db_path`
     # in-place così la successiva `command.upgrade` lavora sul file corretto.
+    # Restore-pending va prima ancora: cambia sia il file che la chiave nel
+    # keychain, e tutto il resto del boot deve lavorare sui nuovi dati.
+    _apply_restore_if_pending()
     _ensure_db_state()
     _run_migrations()
     from app.__main__ import main as app_main

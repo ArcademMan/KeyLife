@@ -11,6 +11,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
+from pathlib import Path
 
 from app.aggregator.buffer import Aggregator
 from app.core.config import get_settings
@@ -18,11 +19,21 @@ from app.hook.events import KeyEvent
 from app.hook.foreground import ForegroundHook
 from app.hook.icons import extract_icon_png
 from app.hook.win_hook import WindowsKeyboardHook
+from app.storage.backup import (
+    BackupInfo,
+    create_backup,
+    list_backups,
+    prune_backups,
+)
 from app.storage.repository import (
+    BackupConfig,
     PerAppSettings,
     flush_snapshot,
+    get_backup_config,
+    get_backup_envelope,
     get_per_app_settings,
     list_apps_with_icons,
+    mark_backup_done,
     set_app_icon,
 )
 from app.storage.session import get_sessionmaker
@@ -72,6 +83,18 @@ class KeyLifeDaemon:
         self._icon_thread: threading.Thread | None = None
         self._icons_known: set[str] = set()
 
+        # --- Backup (opt-in, passphrase-protected) -----------------------
+        # Stato analogo al per-app: `refresh_backup_state()` legge il DB
+        # e (ri)avvia il thread di backup periodico se enabled.
+        self._backup_cfg: BackupConfig = BackupConfig(
+            False, 24, 7, None, has_passphrase=False, last_backup_at=None,
+        )
+        self._backup_thread: threading.Thread | None = None
+        self._backup_wake = threading.Event()
+        # Monotonic deadline del prossimo backup; rieletto a ogni cambio
+        # di interval e a ogni backup completato.
+        self._next_backup_at: float = 0.0
+
     @property
     def aggregator(self) -> Aggregator:
         return self._aggregator
@@ -113,16 +136,24 @@ class KeyLifeDaemon:
             self.refresh_per_app_state()
         except Exception:
             log.exception("could not init per-app tracking; feature stays off")
+        # Backup: stessa logica del per-app.
+        try:
+            self.refresh_backup_state()
+        except Exception:
+            log.exception("could not init backup schedule; feature stays off")
 
     def stop(self) -> None:
         log.info("Stopping KeyLife daemon")
         self._stop.set()
         self._wake.set()
+        self._backup_wake.set()
         self._hook.stop()
         self._stop_foreground_if_running()
         self._stop_icon_worker_if_running()
         if self._flush_thread is not None:
             self._flush_thread.join(timeout=5.0)
+        if self._backup_thread is not None:
+            self._backup_thread.join(timeout=5.0)
         # Final flush on shutdown so we don't lose the tail
         self._flush_once()
 
@@ -318,6 +349,156 @@ class KeyLifeDaemon:
                 log.debug("stored icon for %s (%d bytes)", exe_name, len(png))
             except Exception:
                 log.exception("could not persist icon for %s", exe_name)
+
+    # --- Backup lifecycle ----------------------------------------------
+
+    @property
+    def backup_config(self) -> BackupConfig:
+        return self._backup_cfg
+
+    def _resolve_backup_dir(self, override: str | None) -> Path:
+        """Path effettivo dove scrivere i backup: override utente o default."""
+        if override:
+            return Path(override)
+        return self._settings.data_dir / "backups"
+
+    def refresh_backup_state(self) -> None:
+        """Rilegge config dal DB e (ri)avvia il backup thread se serve.
+
+        Chiamata da `start()` e dall'API quando l'utente cambia settings.
+        Idempotente. Se `enabled` ma manca la passphrase (no envelope),
+        il loop viene avviato lo stesso ma salta i tick — l'utente vede
+        un last_backup_at che non avanza e capisce di dover settare la
+        passphrase.
+        """
+        with self._SessionLocal() as session:
+            new_cfg = get_backup_config(session)
+        was_enabled = self._backup_cfg.enabled
+        self._backup_cfg = new_cfg
+
+        if new_cfg.enabled:
+            self._next_backup_at = time.monotonic() + new_cfg.interval_hours * 3600
+            self._backup_wake.set()
+            if self._backup_thread is None or not self._backup_thread.is_alive():
+                t = threading.Thread(
+                    target=self._backup_loop, name="keylife-backup", daemon=True,
+                )
+                self._backup_thread = t
+                t.start()
+            if not was_enabled:
+                log.info(
+                    "backup ENABLED (every %dh, keep %d, dir=%s, passphrase=%s)",
+                    new_cfg.interval_hours, new_cfg.keep_n,
+                    self._resolve_backup_dir(new_cfg.dir).name,
+                    "set" if new_cfg.has_passphrase else "MISSING",
+                )
+        else:
+            # Il loop esce da solo al prossimo wake, controllando enabled.
+            self._backup_wake.set()
+            if was_enabled:
+                log.info("backup DISABLED")
+
+    def _backup_loop(self) -> None:
+        log.debug("backup loop started")
+        while not self._stop.is_set():
+            if not self._backup_cfg.enabled:
+                # Disabled via refresh: esci pulito così il thread può
+                # ripartire al prossimo enable.
+                log.debug("backup loop exiting (disabled)")
+                self._backup_thread = None
+                return
+            remaining = self._next_backup_at - time.monotonic()
+            if remaining > 0:
+                self._backup_wake.wait(remaining)
+                self._backup_wake.clear()
+                if self._stop.is_set():
+                    return
+                # Config potrebbe essere cambiata durante l'attesa.
+                if time.monotonic() < self._next_backup_at:
+                    continue
+            try:
+                self._do_backup_tick()
+            except Exception:
+                log.exception("scheduled backup failed; will retry next tick")
+            finally:
+                self._next_backup_at = (
+                    time.monotonic() + self._backup_cfg.interval_hours * 3600
+                )
+
+    def _do_backup_tick(self) -> None:
+        """Una iterazione del backup automatico. Skippa se manca passphrase."""
+        if not self._backup_cfg.has_passphrase:
+            log.warning("backup tick skipped: no passphrase envelope set")
+            return
+        self.run_backup_now()
+
+    def run_backup_now(self) -> BackupInfo:
+        """Esegue UN backup, sincrono. Usata da scheduler e da API trigger.
+
+        Serializzata col `_flush_lock`: niente write in volo mentre vacuumamo.
+        Atomica per il filesystem (VACUUM INTO scrive un file separato, poi
+        zippa e rename). Aggiorna `backup_last_at` solo se tutto passa.
+        Solleva eccezioni in faccia al caller (l'API le converte in 400/500).
+        """
+        with self._SessionLocal() as session:
+            envelope = get_backup_envelope(session)
+            cfg = get_backup_config(session)
+        if envelope is None:
+            raise RuntimeError("no passphrase envelope set; cannot backup")
+
+        dest_dir = self._resolve_backup_dir(cfg.dir)
+        with self._flush_lock:
+            info = create_backup(
+                self._settings.db_path,
+                self._settings.db_key,
+                envelope,  # type: ignore[arg-type]
+                dest_dir,
+                app_version=None,
+            )
+        # Prune fuori dal lock: tocca solo file di backup, mai il DB.
+        removed = prune_backups(dest_dir, cfg.keep_n)
+        if removed:
+            log.info("pruned %d old backup(s)", len(removed))
+
+        with self._SessionLocal() as session:
+            mark_backup_done(session, info.created_at)
+        # Aggiorna lo stato in-memory così l'API GET vede l'ultimo timestamp
+        # senza dover rileggere il DB.
+        self._backup_cfg = BackupConfig(
+            enabled=cfg.enabled, interval_hours=cfg.interval_hours,
+            keep_n=cfg.keep_n, dir=cfg.dir, has_passphrase=True,
+            last_backup_at=info.created_at,
+        )
+        log.info("backup created: %s (%d bytes)", info.filename, info.size)
+        return info
+
+    def list_existing_backups(self) -> list[BackupInfo]:
+        """Lista i backup nella dir corrente. Usato dall'API."""
+        cfg = self._backup_cfg
+        return list_backups(self._resolve_backup_dir(cfg.dir))
+
+    def delete_backup_file(self, filename: str) -> bool:
+        """Cancella un singolo backup per nome. Path-traversal-safe.
+
+        Restituisce True se cancellato, False se non trovato. Solleva
+        ValueError se il filename non rispetta il pattern dei nostri
+        backup — evita che un client malizioso cancelli arbitrary files
+        nella backup dir (es. il dump manuale dell'utente).
+        """
+        from app.storage.backup import _BACKUP_FILENAME_RE
+        if not _BACKUP_FILENAME_RE.match(filename):
+            raise ValueError(f"not a KeyLife backup filename: {filename}")
+        cfg = self._backup_cfg
+        path = self._resolve_backup_dir(cfg.dir) / filename
+        # Resolve + parent check: blinda contro filename che contengono
+        # path separators che avessero superato la regex (paranoia).
+        resolved = path.resolve()
+        if resolved.parent != self._resolve_backup_dir(cfg.dir).resolve():
+            raise ValueError(f"path escapes backup dir: {filename}")
+        if not resolved.is_file():
+            return False
+        resolved.unlink()
+        return True
 
 
 class UiEventBridge:

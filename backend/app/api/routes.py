@@ -2,14 +2,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import date as _date, timedelta
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+import tempfile
+from fastapi import (
+    APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile,
+)
 
 from app.aggregator.buffer import Aggregator
 from app.core.config import get_settings
 from app.core.paths import BACKEND_DIR
 from app.hook.vk_codes import name as vk_name
+from app.storage.backup import (
+    BackupCorrupt,
+    InvalidPassphrase,
+    cancel_pending_restore,
+    restore_pending_info,
+    stage_restore,
+    unwrap_db_key,
+    wrap_db_key,
+)
 from app.storage.repository import (
     all_time_total_and_first_date,
     apps_hourly_range,
@@ -17,10 +30,14 @@ from app.storage.repository import (
     daily_totals_range,
     forget_app,
     get_app_icon,
+    get_backup_config,
+    get_backup_envelope,
     get_per_app_settings,
     hourly_matrix_range,
     keys_in_range,
     list_apps_with_icons,
+    set_backup_config,
+    set_backup_envelope,
     set_per_app_settings,
     today_total,
     top_keys_range,
@@ -42,6 +59,9 @@ from .schemas import (
     AppHourlyCell,
     AppsHourlyResponse,
     AppsSummaryResponse,
+    BackupConfigModel,
+    BackupConfigUpdate,
+    BackupInfoModel,
     DailyTotal,
     ForgetAppRequest,
     ForgetAppResponse,
@@ -49,8 +69,11 @@ from .schemas import (
     HourlyHeatmapResponse,
     KeyboardHeatmapResponse,
     KeyCount,
+    PassphraseDeleteRequest,
+    PassphraseSetRequest,
     PerAppSettingsModel,
     PerAppSettingsUpdate,
+    RestoreStagedResponse,
     SummaryResponse,
     TimelineResponse,
     TopKeysResponse,
@@ -324,3 +347,296 @@ def apps_forget(body: ForgetAppRequest) -> ForgetAppResponse:
     with SessionLocal() as session:
         n = forget_app(session, name)
     return ForgetAppResponse(exe_name=name, rows_deleted=n)
+
+
+# ---- Backup endpoints --------------------------------------------------
+
+# Hard cap su quanto leggiamo da un upload .zip di restore: il DB non
+# dovrebbe superare poche decine di MB in usi normali. 200 MB ci copre con
+# margine 100x e fa da sentinel anti-DOS.
+_MAX_RESTORE_UPLOAD_BYTES = 200 * 1024 * 1024
+
+
+def _daemon(request: Request):
+    return getattr(request.app.state, "daemon", None)
+
+
+def _backup_config_response(request: Request) -> BackupConfigModel:
+    settings = get_settings()
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as session:
+        cfg = get_backup_config(session)
+    resolved = cfg.dir or str(settings.data_dir / "backups")
+    return BackupConfigModel(
+        enabled=cfg.enabled,
+        interval_hours=cfg.interval_hours,
+        keep_n=cfg.keep_n,
+        dir=cfg.dir,
+        resolved_dir=resolved,
+        has_passphrase=cfg.has_passphrase,
+        last_backup_at=cfg.last_backup_at,
+        restore_pending=restore_pending_info(settings.data_dir) is not None,
+    )
+
+
+@router.get("/settings/backup", response_model=BackupConfigModel)
+def backup_config_get(request: Request) -> BackupConfigModel:
+    return _backup_config_response(request)
+
+
+@router.put("/settings/backup", response_model=BackupConfigModel)
+def backup_config_put(body: BackupConfigUpdate, request: Request) -> BackupConfigModel:
+    SessionLocal = get_sessionmaker()
+    # `enabled=True` ha senso solo se c'è una passphrase: altrimenti il
+    # loop gira ma salta ogni tick. Più chiaro al setter dire 400 subito.
+    if body.enabled is True:
+        with SessionLocal() as session:
+            cfg = get_backup_config(session)
+        if not cfg.has_passphrase:
+            raise HTTPException(
+                status_code=400,
+                detail="set a backup passphrase before enabling auto-backup",
+            )
+
+    # `dir` ha 3 stati nel modello (campo opzionale Pydantic):
+    # - non passato (model_fields_set non lo contiene) → invariato
+    # - passato a "" o None → reset al default
+    # - passato a stringa → set
+    dir_arg: object
+    if "dir" in body.model_fields_set:
+        dir_arg = body.dir or ""   # "" sentinel handled by setter
+    else:
+        from app.storage.repository import _UNSET  # type: ignore[attr-defined]
+        dir_arg = _UNSET
+
+    try:
+        with SessionLocal() as session:
+            set_backup_config(
+                session,
+                enabled=body.enabled,
+                interval_hours=body.interval_hours,
+                keep_n=body.keep_n,
+                dir=dir_arg,  # type: ignore[arg-type]
+            )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # Hot-reload nel daemon: backup loop riparte/cambia cadenza senza riavvio.
+    daemon = _daemon(request)
+    if daemon is not None:
+        try:
+            daemon.refresh_backup_state()
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).exception("daemon backup refresh failed")
+
+    return _backup_config_response(request)
+
+
+@router.put("/settings/backup/passphrase", response_model=BackupConfigModel)
+def backup_set_passphrase(body: PassphraseSetRequest, request: Request) -> BackupConfigModel:
+    """Set o change della passphrase.
+
+    Se non esiste un envelope, `old_passphrase` viene ignorato e viene
+    creato un nuovo envelope dalla chiave DB corrente. Se esiste, `old_`
+    è obbligatorio e deve sbloccare l'envelope esistente — altrimenti 401.
+
+    Nota: cambiare la passphrase NON re-wrappa i backup .zip già scritti
+    (sono immutabili e usano la vecchia passphrase). Il frontend mostra
+    un warning su questo punto.
+    """
+    settings = get_settings()
+    SessionLocal = get_sessionmaker()
+
+    with SessionLocal() as session:
+        existing = get_backup_envelope(session)
+
+    if existing is not None:
+        if not body.old_passphrase:
+            raise HTTPException(
+                status_code=400,
+                detail="old_passphrase is required to change an existing passphrase",
+            )
+        try:
+            unwrap_db_key(body.old_passphrase, existing)
+        except InvalidPassphrase:
+            raise HTTPException(status_code=401, detail="old passphrase is incorrect")
+        except BackupCorrupt as e:
+            raise HTTPException(status_code=500, detail=f"existing envelope is corrupt: {e}")
+
+    # Nuovo envelope dalla chiave DB corrente (mai cambia, viene solo
+    # ri-wrappata con la nuova passphrase).
+    db_key_hex = settings.db_key.get_secret_value()
+    new_env = wrap_db_key(body.new_passphrase, db_key_hex)
+    with SessionLocal() as session:
+        set_backup_envelope(session, dict(new_env))
+
+    daemon = _daemon(request)
+    if daemon is not None:
+        try:
+            daemon.refresh_backup_state()
+        except Exception:
+            pass
+
+    return _backup_config_response(request)
+
+
+@router.delete("/settings/backup/passphrase", response_model=BackupConfigModel)
+def backup_delete_passphrase(body: PassphraseDeleteRequest, request: Request) -> BackupConfigModel:
+    """Rimuove l'envelope. Disabilita anche auto-backup se attivo.
+
+    Richiede la passphrase corrente come conferma: cancellare per sbaglio
+    significherebbe non poter più decifrare i backup esistenti (la
+    passphrase è l'unico modo di unwrappare la chiave).
+    """
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as session:
+        existing = get_backup_envelope(session)
+    if existing is None:
+        raise HTTPException(status_code=400, detail="no passphrase to delete")
+    try:
+        unwrap_db_key(body.passphrase, existing)
+    except InvalidPassphrase:
+        raise HTTPException(status_code=401, detail="passphrase is incorrect")
+    except BackupCorrupt as e:
+        raise HTTPException(status_code=500, detail=f"envelope corrupt: {e}")
+
+    with SessionLocal() as session:
+        set_backup_envelope(session, None)
+        # Spegni anche auto-backup, altrimenti il loop continua a girare
+        # e a fallire (no envelope).
+        set_backup_config(session, enabled=False)
+
+    daemon = _daemon(request)
+    if daemon is not None:
+        try:
+            daemon.refresh_backup_state()
+        except Exception:
+            pass
+
+    return _backup_config_response(request)
+
+
+@router.get("/backups", response_model=list[BackupInfoModel])
+def backups_list(request: Request) -> list[BackupInfoModel]:
+    daemon = _daemon(request)
+    if daemon is None:
+        return []
+    return [
+        BackupInfoModel(filename=b.filename, size=b.size, created_at=b.created_at)
+        for b in daemon.list_existing_backups()
+    ]
+
+
+@router.post("/backups/now", response_model=BackupInfoModel)
+def backups_now(request: Request) -> BackupInfoModel:
+    """Triggera un backup immediato (sincrono). Richiede passphrase impostata."""
+    daemon = _daemon(request)
+    if daemon is None:
+        raise HTTPException(status_code=503, detail="daemon not running")
+    SessionLocal = get_sessionmaker()
+    with SessionLocal() as session:
+        cfg = get_backup_config(session)
+    if not cfg.has_passphrase:
+        raise HTTPException(
+            status_code=400,
+            detail="set a backup passphrase before triggering a backup",
+        )
+    try:
+        info = daemon.run_backup_now()
+    except Exception as e:
+        # Niente leak del path completo nel detail: i path includono lo
+        # username Windows.
+        raise HTTPException(status_code=500, detail=f"backup failed: {type(e).__name__}")
+    return BackupInfoModel(
+        filename=info.filename, size=info.size, created_at=info.created_at,
+    )
+
+
+@router.delete("/backups/{filename}", status_code=204)
+def backups_delete(filename: str, request: Request) -> Response:
+    daemon = _daemon(request)
+    if daemon is None:
+        raise HTTPException(status_code=503, detail="daemon not running")
+    try:
+        ok = daemon.delete_backup_file(filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not ok:
+        raise HTTPException(status_code=404, detail="backup not found")
+    return Response(status_code=204)
+
+
+@router.post("/backups/restore", response_model=RestoreStagedResponse)
+async def backups_restore(
+    file: UploadFile = File(...),
+    passphrase: str = Form(...),
+) -> RestoreStagedResponse:
+    """Stagea un restore. Il restore EFFETTIVO avviene al prossimo riavvio.
+
+    Step-by-step:
+      1. Salva il .zip in un file temp (l'API non scrive nella backup dir
+         dell'utente).
+      2. `stage_restore()` valida zip + passphrase + estrae il DB nella
+         staging dir + scrive il marker. Tutto o niente.
+      3. Risponde 200 con `restart_required=true`.
+
+    Errori comuni:
+      - passphrase sbagliata → 401
+      - zip non valido / manifest mancante → 400
+      - upload troppo grande → 413
+    """
+    settings = get_settings()
+
+    # Streaming read con cap. UploadFile.size può essere None su certi
+    # client; non possiamo fidarci e dobbiamo contare i byte letti.
+    with tempfile.NamedTemporaryFile(
+        prefix="keylife-restore-", suffix=".zip", delete=False,
+    ) as tmp:
+        tmp_path = tmp.name
+        total = 0
+        try:
+            while True:
+                chunk = await file.read(1024 * 1024)  # 1 MiB
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > _MAX_RESTORE_UPLOAD_BYTES:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"upload too large (>{_MAX_RESTORE_UPLOAD_BYTES // (1024*1024)} MB)",
+                    )
+                tmp.write(chunk)
+        except HTTPException:
+            tmp.close()
+            try: os.unlink(tmp_path)
+            except OSError: pass
+            raise
+
+    try:
+        from pathlib import Path as _Path
+        staged = stage_restore(_Path(tmp_path), passphrase, settings.data_dir)
+    except InvalidPassphrase:
+        raise HTTPException(status_code=401, detail="passphrase is incorrect")
+    except BackupCorrupt as e:
+        raise HTTPException(status_code=400, detail=f"invalid backup: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"restore staging failed: {type(e).__name__}")
+    finally:
+        try: os.unlink(tmp_path)
+        except OSError: pass
+
+    return RestoreStagedResponse(
+        staged_at=staged.staged_at,
+        source_filename=file.filename or "backup.zip",
+    )
+
+
+@router.delete("/backups/restore", status_code=204)
+def backups_restore_cancel(request: Request) -> Response:
+    """Annulla un restore staged ma non ancora applicato."""
+    settings = get_settings()
+    ok = cancel_pending_restore(settings.data_dir)
+    if not ok:
+        raise HTTPException(status_code=404, detail="no restore pending")
+    return Response(status_code=204)
