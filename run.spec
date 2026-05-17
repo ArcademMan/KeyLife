@@ -125,6 +125,14 @@ a = Analysis(
         'PIL.Image',
         'PIL._imaging',
         *collect_submodules('PIL'),
+        # python-multipart è il package PyPI, ma il modulo Python si
+        # chiama `multipart`. Starlette/FastAPI lo importano LAZY dentro
+        # gli handler che usano File(...)/Form(...). PyInstaller fa
+        # analisi statica top-level e non vede i lazy import nei body
+        # delle funzioni di starlette, quindi senza questo hint il
+        # bundle non lo include e /api/backups/restore esplode al primo
+        # upload con "Form data requires python-multipart to be installed".
+        'multipart',
     ],
     hookspath=[],
     hooksconfig={},
