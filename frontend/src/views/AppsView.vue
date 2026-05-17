@@ -290,15 +290,17 @@ function tooltipFor(exe: string): string {
                 </div>
               </div>
 
-              <!-- 24-bar chart, fixed height. Bars use bg-accent with opacity. -->
+              <!-- 24-bar chart. Wrapper is h-full so the bar's % height resolves
+                   against the container (h-20 = 5rem); bar is absolute+bottom-0
+                   so it grows upward. Pure flex without h-full collapses to 0. -->
               <div class="flex items-end gap-px h-20" role="img" aria-label="hour profile">
                 <div
                   v-for="(c, h) in profileFor(app.exe_name)!.byHour"
                   :key="h"
-                  class="flex-1 relative group"
+                  class="flex-1 relative h-full"
                 >
                   <div
-                    class="w-full rounded-sm transition-colors"
+                    class="absolute bottom-0 left-0 right-0 rounded-sm transition-colors"
                     :class="c > 0 ? 'bg-accent' : 'bg-slate-800'"
                     :style="{
                       height: c > 0
@@ -311,10 +313,10 @@ function tooltipFor(exe: string): string {
                 </div>
               </div>
 
-              <!-- Hour axis labels: every 3 hours -->
+              <!-- Hour axis labels: tutte e 24, una sotto ogni barra. -->
               <div class="flex gap-px mt-1 text-[10px] text-slate-500 tabular-nums">
                 <div v-for="h in 24" :key="h-1" class="flex-1 text-center">
-                  <span v-if="(h - 1) % 3 === 0">{{ String(h - 1).padStart(2, '0') }}</span>
+                  {{ String(h - 1).padStart(2, '0') }}
                 </div>
               </div>
             </template>

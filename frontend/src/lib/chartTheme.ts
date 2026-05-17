@@ -47,6 +47,13 @@ export function visualMap(max: number, extra: Record<string, unknown> = {}) {
     bottom: 10,
     inRange: { color: [...HEATMAP_RANGE] },
     textStyle: { color: COLORS.axisLabel },
+    // Rimuove la handle trascinabile (filter UI) ma lascia attivo il
+    // cross-link sull'hover delle celle della heatmap.
+    calculable: false,
+    // `align: 'bottom'` con orient horizontal sposta i text label (e di
+    // riflesso il value che appare sull'hover) SOTTO la barra colorata,
+    // così non si sovrappongono alla riga sopra (x-axis labels, ecc.).
+    align: 'bottom' as const,
     ...extra,
   }
 }

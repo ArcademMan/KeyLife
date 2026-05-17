@@ -6,7 +6,7 @@ import { api } from '../api'
 import { useRangeStore } from '../stores/range'
 import type { Timeline } from '../types'
 import ChartBox from '../components/ChartBox.vue'
-import { AXIS_VALUE, COLORS, HEATMAP_RANGE, TOOLTIP } from '../lib/chartTheme'
+import { AXIS_VALUE, COLORS, TOOLTIP, visualMap } from '../lib/chartTheme'
 
 const router = useRouter()
 
@@ -63,15 +63,7 @@ const calendarOption = computed(() => {
       ...TOOLTIP,
       formatter: (p: any) => `${p.value[0]}<br><b>${p.value[1].toLocaleString()}</b> presses`,
     },
-    visualMap: {
-      min: 0,
-      max: max.value || 1,
-      orient: 'horizontal',
-      left: 'center',
-      bottom: 8,
-      inRange: { color: [...HEATMAP_RANGE] },
-      textStyle: { color: COLORS.axisLabel },
-    },
+    visualMap: visualMap(max.value, { bottom: 8 }),
     calendar: {
       top: 30,
       left: 50,
