@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRangeStore, PRESETS, type PresetId } from '../stores/range'
+import { fmtIsoDdMmYyyy } from '../lib/date'
 
 const range = useRangeStore()
 const { start, end, preset, dayCount } = storeToRefs(range)
@@ -12,15 +13,10 @@ const root = ref<HTMLDivElement | null>(null)
 const QUICK: PresetId[] = ['7d', '30d', '90d', '1y', 'all']
 const quickPresets = computed(() => PRESETS.filter(p => QUICK.includes(p.id)))
 
-function fmtIso(iso: string): string {
-  const [y, m, d] = iso.split('-')
-  return `${d}/${m}/${y}`
-}
-
 const triggerLabel = computed(() => {
   const def = PRESETS.find(p => p.id === preset.value)
   if (def && preset.value !== 'custom') return def.label
-  return `${fmtIso(start.value)} → ${fmtIso(end.value)}`
+  return `${fmtIsoDdMmYyyy(start.value)} → ${fmtIsoDdMmYyyy(end.value)}`
 })
 
 function onDocClick(e: MouseEvent) {

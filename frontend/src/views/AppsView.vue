@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { api } from '../api'
 import { useRangeStore } from '../stores/range'
 import type { AppCount, AppsHourly, AppsSummary, PerAppSettings } from '../types'
+import AppIcon from '../components/AppIcon.vue'
+import { useLivePoll } from '../composables/useLivePoll'
 
 const data = ref<AppsSummary | null>(null)
 const settings = ref<PerAppSettings | null>(null)
@@ -38,42 +40,13 @@ watch(params, () => {
   load()
 }, { deep: true })
 
-// Live polling, identico al pattern di KeyboardView: trigger su bump di
-// all_time_total invece che ogni N secondi cieco, così evitiamo reload
-// inutili quando non c'è attività.
-const lastAllTime = ref<number | null>(null)
-const pollSec = ref<number>(60)
-let pollTimer: number | undefined
-
-async function poll(): Promise<void> {
-  if (document.hidden) return
-  try {
-    const s = await api.summary()
-    pollSec.value = s.flush_interval_seconds
-    if (lastAllTime.value !== null && s.all_time_total > lastAllTime.value) {
-      data.value = await api.appsSummary({ ...params.value, limit: 50 })
-      // Se l'utente sta guardando un'app espansa, aggiorna anche quella
-      // così i nuovi presses si vedono nelle barre.
-      if (expandedExe.value) {
-        await fetchHourly(expandedExe.value, true)
-      }
-    }
-    lastAllTime.value = s.all_time_total
-  } catch { /* swallow */ }
-}
-
-watch(pollSec, (sec) => {
-  if (pollTimer) clearInterval(pollTimer)
-  pollTimer = window.setInterval(poll, Math.max(sec * 1000, 2000))
-}, { immediate: true })
-
-onMounted(() => {
-  poll()
-  document.addEventListener('visibilitychange', poll)
-})
-onBeforeUnmount(() => {
-  if (pollTimer) clearInterval(pollTimer)
-  document.removeEventListener('visibilitychange', poll)
+useLivePoll(async () => {
+  data.value = await api.appsSummary({ ...params.value, limit: 50 })
+  // Se l'utente sta guardando un'app espansa, aggiorna anche quella
+  // così i nuovi presses si vedono nelle barre.
+  if (expandedExe.value) {
+    await fetchHourly(expandedExe.value, true)
+  }
 })
 
 const apps = computed<AppCount[]>(() => data.value?.apps ?? [])
@@ -87,24 +60,6 @@ function pct(n: number): number {
 function barWidth(n: number): string {
   if (maxCount.value === 0) return '0%'
   return `${(n / maxCount.value) * 100}%`
-}
-
-function iconUrl(exe: string): string {
-  return api.appIconUrl(exe)
-}
-
-const FALLBACK_ICON_DATA = (() => {
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>
-    <rect x='2' y='2' width='28' height='28' rx='6' fill='%23334155'/>
-    <text x='16' y='22' font-family='ui-sans-serif' font-size='14'
-          fill='%23cbd5e1' text-anchor='middle'>?</text>
-  </svg>`
-  return `data:image/svg+xml;utf8,${svg.replace(/\s+/g, ' ').trim()}`
-})()
-
-function onIconError(e: Event): void {
-  const img = e.target as HTMLImageElement
-  if (img.src !== FALLBACK_ICON_DATA) img.src = FALLBACK_ICON_DATA
 }
 
 const trackingOff = computed(() => settings.value?.tracking_enabled === false)
@@ -271,14 +226,7 @@ function tooltipFor(exe: string): string {
             :aria-controls="`hourly-panel-${app.exe_name}`"
             @click="toggleExpand(app.exe_name)"
           >
-            <img
-              :src="app.has_icon ? iconUrl(app.exe_name) : FALLBACK_ICON_DATA"
-              :alt="''"
-              class="w-8 h-8 shrink-0 rounded-sm bg-slate-900 object-contain"
-              loading="lazy"
-              decoding="async"
-              @error="onIconError"
-            />
+            <AppIcon :exe="app.exe_name" :has-icon="app.has_icon" />
             <div class="flex-1 min-w-0">
               <div class="flex items-baseline justify-between gap-2">
                 <div

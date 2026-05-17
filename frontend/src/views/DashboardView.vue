@@ -4,6 +4,7 @@ import { api } from '../api'
 import type { Summary, Timeline, TopKeys } from '../types'
 import StatCard from '../components/StatCard.vue'
 import ChartBox from '../components/ChartBox.vue'
+import { AXIS_VALUE, COLORS, TOOLTIP } from '../lib/chartTheme'
 
 const summary = ref<Summary | null>(null)
 const timeline = ref<Timeline | null>(null)
@@ -65,15 +66,14 @@ const sparkOption = computed(() => {
     yAxis: { type: 'value', show: false },
     tooltip: {
       trigger: 'axis',
-      backgroundColor: '#0f172a',
-      borderColor: '#334155',
-      textStyle: { color: '#e2e8f0', fontFamily: 'ui-monospace, monospace' },
+      ...TOOLTIP,
+      textStyle: { color: COLORS.textTooltip, fontFamily: 'ui-monospace, monospace' },
     },
     series: [{
       type: 'line',
       smooth: true,
       symbol: 'none',
-      lineStyle: { width: 2, color: '#7c5cff' },
+      lineStyle: { width: 2, color: COLORS.accent },
       areaStyle: { color: 'rgba(124,92,255,0.18)' },
       data: days.map(d => d.total),
     }],
@@ -87,28 +87,23 @@ const topBarOption = computed(() => {
     grid: { left: 90, right: 30, top: 8, bottom: 24 },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'shadow' },
-      backgroundColor: '#0f172a', borderColor: '#334155',
-      textStyle: { color: '#e2e8f0' },
+      ...TOOLTIP,
       formatter: (p: any) => {
         const it = p[0]
         return `${it.name}<br>${it.value.toLocaleString()} presses`
       },
     },
-    xAxis: {
-      type: 'value', axisLine: { show: false }, axisTick: { show: false },
-      splitLine: { lineStyle: { color: '#1e293b' } },
-      axisLabel: { color: '#94a3b8' },
-    },
+    xAxis: { type: 'value', ...AXIS_VALUE },
     yAxis: {
       type: 'category',
       data: keys.map(k => k.name.replace(/^VK_/, '')),
       axisLine: { show: false }, axisTick: { show: false },
-      axisLabel: { color: '#cbd5e1' },
+      axisLabel: { color: COLORS.axisLabel },
     },
     series: [{
       type: 'bar',
       data: keys.map(k => k.count),
-      itemStyle: { color: '#7c5cff', borderRadius: [0, 4, 4, 0] },
+      itemStyle: { color: COLORS.accent, borderRadius: [0, 4, 4, 0] },
       barWidth: '60%',
     }],
   }

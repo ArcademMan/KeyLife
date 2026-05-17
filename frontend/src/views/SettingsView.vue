@@ -3,6 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
 import type { AppCount, KeyboardLayout, LayoutKey, PerAppSettings } from '../types'
 import { useHandmapStore, geometricHand, type Hand } from '../stores/handmap'
+import KeyboardGrid from '../components/KeyboardGrid.vue'
 
 const handmap = useHandmapStore()
 
@@ -107,12 +108,6 @@ async function forgetSelected(): Promise<void> {
     perAppBusy.value = false
   }
 }
-
-const KEY_UNIT_PX = 48
-const KEY_GAP_PX = 4
-
-const keyboardWidth = computed(() => layout.value ? layout.value.width * KEY_UNIT_PX : 0)
-const keyboardHeight = computed(() => layout.value ? layout.value.height * KEY_UNIT_PX : 0)
 
 // Effective resolution: override if set, else geometric default.
 function effectiveHand(k: LayoutKey): Hand | null {
@@ -284,53 +279,43 @@ function mirror() {
       </div>
 
       <div class="panel p-6 overflow-auto">
-        <div
-          v-if="layout"
-          class="relative mx-auto"
-          :style="{
-            width: keyboardWidth + 'px',
-            height: keyboardHeight + 'px',
-          }"
-        >
-          <button
-            v-for="k in layout.keys"
-            :key="k.id"
-            type="button"
-            :disabled="k.vk == null"
-            class="absolute rounded-md flex flex-col items-center justify-center
-                   text-center select-none transition-colors
-                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-            :class="[
-              k.vk == null
-                ? 'border border-slate-800 cursor-default'
-                : 'border border-slate-700/40 hover:brightness-110 cursor-pointer',
-              isOverridden(k) ? 'ring-2 ring-amber-400/70' : '',
-            ]"
-            :style="{
-              left: (k.x * KEY_UNIT_PX + KEY_GAP_PX/2) + 'px',
-              top: (k.y * KEY_UNIT_PX + KEY_GAP_PX/2) + 'px',
-              width: ((k.w ?? 1) * KEY_UNIT_PX - KEY_GAP_PX) + 'px',
-              height: ((k.h ?? 1) * KEY_UNIT_PX - KEY_GAP_PX) + 'px',
-              background: bgFor(k),
-              color: textFor(k),
-            }"
-            :aria-label="k.label + (isOverridden(k) ? ' (overridden)' : '') +
-                         (effectiveHand(k) ? ' — ' + effectiveHand(k) : '')"
-            :title="k.label + (k.vk == null
-              ? ' • not tracked'
-              : ' • ' + (isOverridden(k) ? 'override: ' : 'default: ') +
-                (effectiveHand(k) ?? '—'))"
-            @click="cycleKey(k)"
-          >
-            <div class="text-[11px] font-medium leading-none">{{ k.label }}</div>
-            <div
-              v-if="k.vk != null"
-              class="text-[9px] opacity-80 mt-0.5 leading-none"
+        <KeyboardGrid v-if="layout" :layout="layout">
+          <template #cell="{ keyDef, style }">
+            <button
+              type="button"
+              :disabled="keyDef.vk == null"
+              class="absolute rounded-md flex flex-col items-center justify-center
+                     text-center select-none transition-colors
+                     focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              :class="[
+                keyDef.vk == null
+                  ? 'border border-slate-800 cursor-default'
+                  : 'border border-slate-700/40 hover:brightness-110 cursor-pointer',
+                isOverridden(keyDef) ? 'ring-2 ring-amber-400/70' : '',
+              ]"
+              :style="{
+                ...style,
+                background: bgFor(keyDef),
+                color: textFor(keyDef),
+              }"
+              :aria-label="keyDef.label + (isOverridden(keyDef) ? ' (overridden)' : '') +
+                           (effectiveHand(keyDef) ? ' — ' + effectiveHand(keyDef) : '')"
+              :title="keyDef.label + (keyDef.vk == null
+                ? ' • not tracked'
+                : ' • ' + (isOverridden(keyDef) ? 'override: ' : 'default: ') +
+                  (effectiveHand(keyDef) ?? '—'))"
+              @click="cycleKey(keyDef)"
             >
-              {{ effectiveHand(k) ?? '·' }}
-            </div>
-          </button>
-        </div>
+              <div class="text-[11px] font-medium leading-none">{{ keyDef.label }}</div>
+              <div
+                v-if="keyDef.vk != null"
+                class="text-[9px] opacity-80 mt-0.5 leading-none"
+              >
+                {{ effectiveHand(keyDef) ?? '·' }}
+              </div>
+            </button>
+          </template>
+        </KeyboardGrid>
       </div>
 
       <div class="text-xs text-slate-500 flex items-center gap-3 flex-wrap">

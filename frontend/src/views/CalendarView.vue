@@ -6,6 +6,7 @@ import { api } from '../api'
 import { useRangeStore } from '../stores/range'
 import type { Timeline } from '../types'
 import ChartBox from '../components/ChartBox.vue'
+import { AXIS_VALUE, COLORS, HEATMAP_RANGE, TOOLTIP } from '../lib/chartTheme'
 
 const router = useRouter()
 
@@ -59,9 +60,7 @@ const calendarOption = computed(() => {
   return {
     backgroundColor: 'transparent',
     tooltip: {
-      backgroundColor: '#0f172a',
-      borderColor: '#334155',
-      textStyle: { color: '#e2e8f0' },
+      ...TOOLTIP,
       formatter: (p: any) => `${p.value[0]}<br><b>${p.value[1].toLocaleString()}</b> presses`,
     },
     visualMap: {
@@ -70,8 +69,8 @@ const calendarOption = computed(() => {
       orient: 'horizontal',
       left: 'center',
       bottom: 8,
-      inRange: { color: ['#1e293b', '#3b3170', '#5b46c4', '#7c5cff', '#b39dff'] },
-      textStyle: { color: '#cbd5e1' },
+      inRange: { color: [...HEATMAP_RANGE] },
+      textStyle: { color: COLORS.axisLabel },
     },
     calendar: {
       top: 30,
@@ -99,30 +98,21 @@ const lineOption = computed(() => {
   return {
     backgroundColor: 'transparent',
     grid: { left: 50, right: 20, top: 20, bottom: 30 },
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: '#0f172a',
-      borderColor: '#334155',
-      textStyle: { color: '#e2e8f0' },
-    },
+    tooltip: { trigger: 'axis', ...TOOLTIP },
     xAxis: {
       type: 'category',
       data: days.map(d => d.date),
-      axisLine: { lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#94a3b8' },
+      axisLine: { lineStyle: { color: COLORS.axisLine } },
+      axisLabel: { color: COLORS.axisLabelDim },
     },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: '#1e293b' } },
-      axisLabel: { color: '#94a3b8' },
-    },
+    yAxis: { type: 'value', ...AXIS_VALUE },
     series: [{
       type: 'line',
       smooth: true,
       symbol: 'circle',
       symbolSize: 4,
-      lineStyle: { width: 2, color: '#7c5cff' },
-      itemStyle: { color: '#7c5cff' },
+      lineStyle: { width: 2, color: COLORS.accent },
+      itemStyle: { color: COLORS.accent },
       areaStyle: { color: 'rgba(124,92,255,0.12)' },
       data: days.map(d => d.total),
     }],

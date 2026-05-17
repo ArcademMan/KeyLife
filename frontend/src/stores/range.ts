@@ -1,60 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed, watch } from 'vue'
 import { api } from '../api'
+import {
+  daysBetween, endOfMonth, isoDaysAgo, isoToday, shiftIso, startOfMonth,
+} from '../lib/date'
+import { safeLoadJSON, safeSaveJSON } from '../lib/storage'
 
 const STORAGE_KEY = 'keylife.range.v1'
-
-// All date helpers must produce LOCAL calendar dates. The backend keys the
-// daily counters by `date.today()` in the host's local time, so the frontend
-// has to match — using UTC (toISOString) skews the picker by a day during
-// the local-vs-UTC offset window and can hide today's presses entirely.
-function isoLocal(d: Date): string {
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
-function parseIsoLocal(iso: string): Date {
-  const [y, m, d] = iso.split('-').map(Number)
-  return new Date(y, m - 1, d)
-}
-
-function isoToday(): string {
-  return isoLocal(new Date())
-}
-
-function isoDaysAgo(n: number): string {
-  const d = new Date()
-  d.setDate(d.getDate() - n)
-  return isoLocal(d)
-}
-
-function startOfMonth(offset = 0): string {
-  const d = new Date()
-  d.setDate(1)
-  d.setMonth(d.getMonth() + offset)
-  return isoLocal(d)
-}
-
-function endOfMonth(offset = 0): string {
-  const d = new Date()
-  d.setDate(1)
-  d.setMonth(d.getMonth() + offset + 1)
-  d.setDate(0)
-  return isoLocal(d)
-}
-
-function daysBetween(a: string, b: string): number {
-  const ms = parseIsoLocal(b).getTime() - parseIsoLocal(a).getTime()
-  return Math.round(ms / 86_400_000) + 1
-}
-
-function shiftIso(iso: string, days: number): string {
-  const d = parseIsoLocal(iso)
-  d.setDate(d.getDate() + days)
-  return isoLocal(d)
-}
 
 export type PresetId = 'today' | 'yesterday' | '7d' | '30d' | '90d' | '1y'
                      | 'this-month' | 'last-month' | 'all' | 'custom'
@@ -100,15 +52,9 @@ interface PersistedState {
 }
 
 function loadPersisted(): PersistedState | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return null
-    const p = JSON.parse(raw) as PersistedState
-    if (!p.start || !p.end || !p.preset) return null
-    return p
-  } catch {
-    return null
-  }
+  const p = safeLoadJSON<PersistedState>(STORAGE_KEY)
+  if (!p?.start || !p.end || !p.preset) return null
+  return p
 }
 
 export const useRangeStore = defineStore('range', () => {
@@ -148,11 +94,9 @@ export const useRangeStore = defineStore('range', () => {
   }
 
   watch([start, end, preset], () => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({
-        start: start.value, end: end.value, preset: preset.value,
-      }))
-    } catch { /* quota / disabled */ }
+    safeSaveJSON(STORAGE_KEY, {
+      start: start.value, end: end.value, preset: preset.value,
+    } satisfies PersistedState)
   })
 
   return { start, end, preset, params, dayCount, applyPreset, setRange, shift }

@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { api } from '../api'
 import { useRangeStore } from '../stores/range'
 import type { HourlyHeatmap } from '../types'
 import ChartBox from '../components/ChartBox.vue'
-
-console.log('[HourlyView] script setup running')
+import { isoWeekday } from '../lib/date'
+import { AXIS_VALUE, COLORS, TOOLTIP, visualMap } from '../lib/chartTheme'
+import { useLivePoll } from '../composables/useLivePoll'
 
 const data = ref<HourlyHeatmap | null>(null)
 const loading = ref(true)
@@ -29,66 +30,10 @@ async function load() {
 
 onMounted(load)
 watch(params, load, { deep: true })
-
-// Live polling: every flush_interval (min 2s, like Dashboard) we hit the cheap
-// /summary endpoint and reload the heatmap only when all_time_total has bumped.
-// Why all_time_total and not session_total: session_total is the live in-memory
-// counter, it bumps on every keystroke, but the heatmap is sourced from the DB
-// — which only changes after a flush. all_time_total is read from the DB so it
-// bumps exactly when there's something new to show.
-// Skip the tick when the tab is hidden so a backgrounded browser stops costing.
-const lastAllTimeTotal = ref<number | null>(null)
-const pollIntervalSec = ref<number>(60)
-let pollTimer: number | undefined
-
-async function poll(): Promise<void> {
-  if (document.hidden) {
-    console.log('[HourlyView] poll skipped (tab hidden)')
-    return
-  }
-  console.log('[HourlyView] polling /summary…')
-  try {
-    const s = await api.summary()
-    pollIntervalSec.value = s.flush_interval_seconds
-    const bumped =
-      lastAllTimeTotal.value !== null &&
-      s.all_time_total > lastAllTimeTotal.value
-    console.log(
-      `[HourlyView] poll ok — all_time=${s.all_time_total} (last=${lastAllTimeTotal.value}) → ${bumped ? 'reload' : 'no change'}`,
-    )
-    if (bumped) await load()
-    lastAllTimeTotal.value = s.all_time_total
-  } catch (e) {
-    console.warn('[HourlyView] poll failed; will retry next tick', e)
-  }
-}
-
-watch(pollIntervalSec, (sec) => {
-  if (pollTimer) clearInterval(pollTimer)
-  const ms = Math.max(sec * 1000, 2000)
-  pollTimer = window.setInterval(poll, ms)
-}, { immediate: true })
-
-function onVisibility(): void { if (!document.hidden) poll() }
-onMounted(() => {
-  poll()
-  document.addEventListener('visibilitychange', onVisibility)
-})
-onBeforeUnmount(() => {
-  if (pollTimer) clearInterval(pollTimer)
-  document.removeEventListener('visibilitychange', onVisibility)
-})
+useLivePoll(load)
 
 const HOURS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`)
 const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
-
-// 0 = Monday … 6 = Sunday. Parse as a local date — `new Date('YYYY-MM-DD')`
-// is UTC midnight, which lands on the previous day in negative-offset TZs and
-// would mis-shelve cells.
-function isoWeekday(iso: string): number {
-  const [y, m, d] = iso.split('-').map(Number)
-  return (new Date(y, m - 1, d).getDay() + 6) % 7
-}
 
 const dates = computed(() => {
   const set = new Set<string>()
@@ -96,14 +41,21 @@ const dates = computed(() => {
   return Array.from(set).sort()
 })
 
-// How many distinct dates fall on each weekday (Mon..Sun) in the loaded range,
-// counting *every* day with data, even hours where total=0 are still part of
-// the same date set.
+// How many distinct dates fall on each weekday (Mon..Sun) in the loaded
+// range, counting *every* day with data — even hours where total=0 are
+// still part of the same date set.
 const datesPerWeekday = computed<number[]>(() => {
   const counts = new Array(7).fill(0)
   for (const d of dates.value) counts[isoWeekday(d)]++
   return counts
 })
+
+const HEATMAP_AXIS = {
+  type: 'category' as const,
+  axisLine: { lineStyle: { color: COLORS.axisLine } },
+  axisLabel: { color: COLORS.axisLabel, fontSize: 11 },
+  splitArea: { show: false },
+}
 
 const heatmapOption = computed(() => {
   const cells = data.value?.cells ?? []
@@ -113,48 +65,26 @@ const heatmapOption = computed(() => {
 
   return {
     backgroundColor: 'transparent',
-    // No fade-in: the chart re-renders on each poll tick and animation makes
-    // the canvas flicker on long ranges (thousands of cells).
+    // No fade-in: the chart re-renders on each poll tick and animation
+    // makes the canvas flicker on long ranges (thousands of cells).
     animation: false,
     tooltip: {
       position: 'top',
-      backgroundColor: '#0f172a',
-      borderColor: '#334155',
-      textStyle: { color: '#e2e8f0' },
+      ...TOOLTIP,
       formatter: (p: any) => {
         const [h, dIdx, v] = p.value
         return `${dates.value[dIdx]} • ${HOURS[h]}<br><b>${(v as number).toLocaleString()}</b> presses`
       },
     },
     grid: { left: 90, right: 30, top: 50, bottom: 60 },
-    xAxis: {
-      type: 'category',
-      data: HOURS,
-      axisLine: { lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#cbd5e1', fontSize: 11 },
-      splitArea: { show: false },
-    },
-    yAxis: {
-      type: 'category',
-      data: dates.value,
-      axisLine: { lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#cbd5e1', fontSize: 11 },
-      splitArea: { show: false },
-    },
-    visualMap: {
-      min: 0,
-      max: max || 1,
-      orient: 'horizontal',
-      left: 'center',
-      bottom: 10,
-      inRange: { color: ['#1e293b', '#3b3170', '#5b46c4', '#7c5cff', '#b39dff'] },
-      textStyle: { color: '#cbd5e1' },
-    },
+    xAxis: { ...HEATMAP_AXIS, data: HOURS },
+    yAxis: { ...HEATMAP_AXIS, data: dates.value },
+    visualMap: visualMap(max),
     series: [{
       type: 'heatmap',
       data: matrix,
-      itemStyle: { borderColor: '#020617', borderWidth: 0.5 },
-      emphasis: { itemStyle: { shadowBlur: 8, shadowColor: '#7c5cff' } },
+      itemStyle: { borderColor: COLORS.heatmapBorder, borderWidth: 0.5 },
+      emphasis: { itemStyle: { shadowBlur: 8, shadowColor: COLORS.accent } },
     }],
   }
 })
@@ -167,28 +97,22 @@ const aggHourOption = computed(() => {
     grid: { left: 50, right: 20, top: 20, bottom: 30 },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'shadow' },
-      backgroundColor: '#0f172a', borderColor: '#334155',
-      textStyle: { color: '#e2e8f0' },
+      ...TOOLTIP,
       formatter: (p: any) => {
         const it = p[0]
         return `${it.name}<br><b>${(it.value as number).toLocaleString()}</b> presses`
       },
     },
     xAxis: {
-      type: 'category',
-      data: HOURS,
-      axisLine: { lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#cbd5e1', fontSize: 10 },
+      type: 'category', data: HOURS,
+      axisLine: { lineStyle: { color: COLORS.axisLine } },
+      axisLabel: { color: COLORS.axisLabel, fontSize: 10 },
     },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: '#1e293b' } },
-      axisLabel: { color: '#94a3b8' },
-    },
+    yAxis: { type: 'value', ...AXIS_VALUE },
     series: [{
       type: 'bar',
       data: totals,
-      itemStyle: { color: '#7c5cff', borderRadius: [4, 4, 0, 0] },
+      itemStyle: { color: COLORS.accent, borderRadius: [4, 4, 0, 0] },
       barWidth: '60%',
     }],
   }
@@ -208,8 +132,7 @@ const aggWeekdayOption = computed(() => {
     grid: { left: 50, right: 20, top: 20, bottom: 30 },
     tooltip: {
       trigger: 'axis', axisPointer: { type: 'shadow' },
-      backgroundColor: '#0f172a', borderColor: '#334155',
-      textStyle: { color: '#e2e8f0' },
+      ...TOOLTIP,
       formatter: (p: any) => {
         const it = p[0]
         const i = it.dataIndex as number
@@ -219,20 +142,15 @@ const aggWeekdayOption = computed(() => {
       },
     },
     xAxis: {
-      type: 'category',
-      data: WEEKDAYS,
-      axisLine: { lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#cbd5e1', fontSize: 11 },
+      type: 'category', data: WEEKDAYS,
+      axisLine: { lineStyle: { color: COLORS.axisLine } },
+      axisLabel: { color: COLORS.axisLabel, fontSize: 11 },
     },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: '#1e293b' } },
-      axisLabel: { color: '#94a3b8' },
-    },
+    yAxis: { type: 'value', ...AXIS_VALUE },
     series: [{
       type: 'bar',
       data: means,
-      itemStyle: { color: '#7c5cff', borderRadius: [4, 4, 0, 0] },
+      itemStyle: { color: COLORS.accent, borderRadius: [4, 4, 0, 0] },
       barWidth: '60%',
     }],
   }
@@ -259,9 +177,7 @@ const weekdayHourOption = computed(() => {
     backgroundColor: 'transparent',
     tooltip: {
       position: 'top',
-      backgroundColor: '#0f172a',
-      borderColor: '#334155',
-      textStyle: { color: '#e2e8f0' },
+      ...TOOLTIP,
       formatter: (p: any) => {
         const [h, wd, v] = p.value
         return `${WEEKDAYS[wd]} • ${HOURS[h]}<br>
@@ -270,34 +186,14 @@ const weekdayHourOption = computed(() => {
       },
     },
     grid: { left: 70, right: 30, top: 30, bottom: 60 },
-    xAxis: {
-      type: 'category',
-      data: HOURS,
-      axisLine: { lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#cbd5e1', fontSize: 11 },
-      splitArea: { show: false },
-    },
-    yAxis: {
-      type: 'category',
-      data: WEEKDAYS,
-      axisLine: { lineStyle: { color: '#334155' } },
-      axisLabel: { color: '#cbd5e1', fontSize: 11 },
-      splitArea: { show: false },
-    },
-    visualMap: {
-      min: 0,
-      max: Math.max(1, Math.round(max)),
-      orient: 'horizontal',
-      left: 'center',
-      bottom: 10,
-      inRange: { color: ['#1e293b', '#3b3170', '#5b46c4', '#7c5cff', '#b39dff'] },
-      textStyle: { color: '#cbd5e1' },
-    },
+    xAxis: { ...HEATMAP_AXIS, data: HOURS },
+    yAxis: { ...HEATMAP_AXIS, data: WEEKDAYS },
+    visualMap: visualMap(Math.round(max)),
     series: [{
       type: 'heatmap',
       data: matrix,
-      itemStyle: { borderColor: '#020617', borderWidth: 0.5 },
-      emphasis: { itemStyle: { shadowBlur: 8, shadowColor: '#7c5cff' } },
+      itemStyle: { borderColor: COLORS.heatmapBorder, borderWidth: 0.5 },
+      emphasis: { itemStyle: { shadowBlur: 8, shadowColor: COLORS.accent } },
     }],
   }
 })
@@ -311,13 +207,11 @@ function onHeatmapClick(p: any) {
   range.setRange(date, date)
 }
 
-const isSingleDay = computed(() => {
-  return params.value.start === params.value.end
-})
+const isSingleDay = computed(() => params.value.start === params.value.end)
 
 // Heatmap height grows ~14px per day. Cap at 9000px so we stay under the
-// per-browser canvas size limit (~10–16k px) on multi-year ranges; the outer
-// scroll container handles overflow above ~70vh.
+// per-browser canvas size limit (~10–16k px) on multi-year ranges; the
+// outer scroll container handles overflow above ~70vh.
 const heatmapHeight = computed(() => {
   const ideal = dates.value.length * 14 + 130
   return Math.min(Math.max(ideal, 260), 9000) + 'px'
