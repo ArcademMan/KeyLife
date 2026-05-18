@@ -362,6 +362,34 @@ class KeyLifeDaemon:
             return Path(override)
         return self._settings.data_dir / "backups"
 
+    def _compute_next_backup_deadline(self, cfg: BackupConfig) -> float:
+        """Monotonic deadline del prossimo backup, ancorata a `last_backup_at`.
+
+        `_next_backup_at` è in-memory (time.monotonic), quindi resettarlo a
+        `now + interval` a ogni `start()` significava: se l'utente non tiene
+        il processo aperto >interval ore di fila, il backup non scatta mai.
+        Qui invece guardiamo last_backup_at sul DB (wall clock, persistito):
+          - mai fatto un backup → aspetta un intervallo intero da adesso
+            (primo run "morbido": l'utente che ha appena attivato la feature
+            non vuole un backup a sorpresa nel primo minuto);
+          - last presente → schedule a `last + interval`. Se è già scaduto
+            mentre il processo era spento, il backup parte al primo tick.
+        """
+        interval_s = cfg.interval_hours * 3600
+        if not cfg.last_backup_at:
+            return time.monotonic() + interval_s
+        try:
+            last_dt = datetime.fromisoformat(
+                cfg.last_backup_at.replace("Z", "+00:00"),
+            )
+        except ValueError:
+            # Timestamp corrotto: degradiamo come "mai fatto un backup".
+            return time.monotonic() + interval_s
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        delay = max(0.0, (last_dt.timestamp() + interval_s) - time.time())
+        return time.monotonic() + delay
+
     def refresh_backup_state(self) -> None:
         """Rilegge config dal DB e (ri)avvia il backup thread se serve.
 
@@ -377,7 +405,7 @@ class KeyLifeDaemon:
         self._backup_cfg = new_cfg
 
         if new_cfg.enabled:
-            self._next_backup_at = time.monotonic() + new_cfg.interval_hours * 3600
+            self._next_backup_at = self._compute_next_backup_deadline(new_cfg)
             self._backup_wake.set()
             if self._backup_thread is None or not self._backup_thread.is_alive():
                 t = threading.Thread(
@@ -421,8 +449,8 @@ class KeyLifeDaemon:
             except Exception:
                 log.exception("scheduled backup failed; will retry next tick")
             finally:
-                self._next_backup_at = (
-                    time.monotonic() + self._backup_cfg.interval_hours * 3600
+                self._next_backup_at = self._compute_next_backup_deadline(
+                    self._backup_cfg,
                 )
 
     def _do_backup_tick(self) -> None:
